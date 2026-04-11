@@ -87,7 +87,7 @@ class MySignups extends Component
             ->firstOrFail();
 
         try {
-            $waitlistService->declineOffer($entry);
+            $waitlistService->declineOffer($entry, 'waitlist.decline.' . $entry->id);
             $this->dispatch('notify', type: 'info', message: 'Offer declined.');
         } catch (\RuntimeException $e) {
             $this->addError('offer', $e->getMessage());

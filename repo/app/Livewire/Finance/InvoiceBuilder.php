@@ -8,6 +8,7 @@ use App\Models\Invoice;
 use App\Models\User;
 use App\Services\InvoiceService;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Str;
 use Livewire\Component;
 
 class InvoiceBuilder extends Component
@@ -22,6 +23,14 @@ class InvoiceBuilder extends Component
     public string $userSearch     = '';
     public ?string $selectedUserId = null;
     public array $userResults      = [];
+
+    /**
+     * Per-component idempotency key for invoice creation. Initialized once
+     * per Livewire component instance so that a retry of `createInvoice`
+     * from the same browser session collapses onto the same invoice row
+     * instead of burning a new MV-YYYY-NNNNN number every click.
+     */
+    public ?string $createIdempotencyKey = null;
 
     public function mount(?Invoice $invoice = null): void
     {
@@ -59,8 +68,11 @@ class InvoiceBuilder extends Component
     public function createInvoice(InvoiceService $service): void
     {
         $this->validate(['selectedUserId' => 'required|uuid|exists:users,id']);
-        $user          = User::findOrFail($this->selectedUserId);
-        $this->invoice = $service->createInvoice($user);
+        $user = User::findOrFail($this->selectedUserId);
+
+        $this->createIdempotencyKey ??= (string) Str::uuid();
+
+        $this->invoice = $service->createInvoice($user, $this->createIdempotencyKey);
         $this->dispatch('notify', type: 'success', message: 'Invoice created.');
     }
 
@@ -93,7 +105,10 @@ class InvoiceBuilder extends Component
     public function issue(InvoiceService $service)
     {
         try {
-            $this->invoice = $service->issueInvoice($this->invoice);
+            $this->invoice = $service->issueInvoice(
+                $this->invoice,
+                'invoice.issue.' . $this->invoice->id,
+            );
             return redirect()->route('finance.invoices.show', $this->invoice)
                 ->with('success', 'Invoice issued.');
         } catch (\RuntimeException $e) {

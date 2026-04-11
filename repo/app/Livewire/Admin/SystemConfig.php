@@ -29,10 +29,10 @@ class SystemConfig extends Component
                 'description' => 'How long a waitlist offer is open before it expires.',
             ],
             [
-                'key'         => 'idempotency_ttl_hours',
-                'label'       => 'Idempotency TTL',
-                'value'       => config('medvoyage.idempotency_ttl_hours') . ' hours',
-                'description' => 'How long idempotency records are retained.',
+                'key'         => 'idempotency_strategy',
+                'label'       => 'Idempotency strategy',
+                'value'       => 'Service-layer per-entity key',
+                'description' => 'Mutating services (signup hold, payment record, membership purchase/renew/top-up, refund request) dedupe on a caller-supplied key stored on the domain row itself — no central records table, no TTL.',
             ],
             [
                 'key'         => 'session_lifetime',

@@ -11,6 +11,7 @@ use App\Exceptions\InvalidStatusTransitionException;
 use App\Models\Trip;
 use App\Models\User;
 use App\Services\AuditService;
+use App\Services\IdempotencyStore;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
@@ -23,14 +24,27 @@ class TripService
 
     /**
      * Create a new trip in DRAFT status.
+     *
+     * Participates in the universal service-layer idempotency contract
+     * (`docs/design.md:70-73`, audit Issue 3). Callers MUST pass a stable
+     * `$idempotencyKey`. A retry with the same key short-circuits to the
+     * existing row without creating a second draft. Combined with the
+     * unique constraint on `trips.idempotency_key`, this collapses racing
+     * double-submits onto one row instead of two.
      */
-    public function create(array $data, User $creator): Trip
+    public function create(array $data, User $creator, string $idempotencyKey): Trip
     {
+        $existing = Trip::where('idempotency_key', $idempotencyKey)->first();
+        if ($existing) {
+            return $existing;
+        }
+
         $trip = Trip::create(array_merge($data, [
             'status'          => TripStatus::DRAFT->value,
             'available_seats' => $data['total_seats'],
             'booking_count'   => 0,
             'created_by'      => $creator->id,
+            'idempotency_key' => $idempotencyKey,
         ]));
 
         AuditService::record('trip.created', 'Trip', $trip->id, null, [
@@ -44,8 +58,13 @@ class TripService
     /**
      * Update trip metadata (only allowed in DRAFT).
      */
-    public function update(Trip $trip, array $data): Trip
+    public function update(Trip $trip, array $data, ?string $idempotencyKey = null): Trip
     {
+        $store = new IdempotencyStore();
+        if ($idempotencyKey && $store->alreadyProcessed($idempotencyKey, 'trip.update', $trip->id)) {
+            return $trip->fresh();
+        }
+
         if ($trip->status !== TripStatus::DRAFT) {
             throw new RuntimeException('Only DRAFT trips can be edited.', 422);
         }
@@ -63,41 +82,72 @@ class TripService
 
         AuditService::record('trip.updated', 'Trip', $trip->id, $before, $trip->only(array_keys($data)));
 
+        if ($idempotencyKey) {
+            $store->record($idempotencyKey, 'trip.update', 'Trip', $trip->id);
+        }
+
         return $trip;
     }
 
     /**
      * DRAFT → PUBLISHED. Requires an approved lead doctor.
      */
-    public function publish(Trip $trip): Trip
+    public function publish(Trip $trip, ?string $idempotencyKey = null): Trip
     {
+        $store = new IdempotencyStore();
+        if ($idempotencyKey && $store->alreadyProcessed($idempotencyKey, 'trip.publish', $trip->id)) {
+            return $trip->fresh();
+        }
+
         $this->assertTransition($trip, TripStatus::PUBLISHED);
 
         if (! $trip->doctor?->isApproved()) {
             throw new RuntimeException('Trip cannot be published: lead doctor is not credentialed.', 422);
         }
 
-        return $this->transition($trip, TripStatus::PUBLISHED, 'trip.published');
+        $result = $this->transition($trip, TripStatus::PUBLISHED, 'trip.published');
+
+        if ($idempotencyKey) {
+            $store->record($idempotencyKey, 'trip.publish', 'Trip', $trip->id);
+        }
+
+        return $result;
     }
 
     /**
      * Close a trip for new signups (PUBLISHED/FULL → CLOSED).
      */
-    public function close(Trip $trip): Trip
+    public function close(Trip $trip, ?string $idempotencyKey = null): Trip
     {
+        $store = new IdempotencyStore();
+        if ($idempotencyKey && $store->alreadyProcessed($idempotencyKey, 'trip.close', $trip->id)) {
+            return $trip->fresh();
+        }
+
         $this->assertTransition($trip, TripStatus::CLOSED);
 
-        return $this->transition($trip, TripStatus::CLOSED, 'trip.closed');
+        $result = $this->transition($trip, TripStatus::CLOSED, 'trip.closed');
+
+        if ($idempotencyKey) {
+            $store->record($idempotencyKey, 'trip.close', 'Trip', $trip->id);
+        }
+
+        return $result;
     }
 
     /**
      * Cancel a trip — cascades to all active signups and waitlist entries.
      */
-    public function cancel(Trip $trip, User $actor): Trip
+    public function cancel(Trip $trip, User $actor, ?string $idempotencyKey = null): Trip
     {
+        $store = new IdempotencyStore();
+        if ($idempotencyKey && $store->alreadyProcessed($idempotencyKey, 'trip.cancel', $trip->id)) {
+            return $trip->fresh();
+        }
+
         $this->assertTransition($trip, TripStatus::CANCELLED);
 
-        DB::transaction(function () use ($trip, $actor) {
+        DB::transaction(function () use ($trip, $actor, $idempotencyKey, $store) {
             // Decline all waitlist entries FIRST — prevents offerNextSeat firing
             // during the hold releases below and broadcasting spurious offers
             $trip->waitlistEntries()
@@ -125,6 +175,10 @@ class TripService
             });
 
             $this->transition($trip, TripStatus::CANCELLED, 'trip.cancelled');
+
+            if ($idempotencyKey) {
+                $store->record($idempotencyKey, 'trip.cancel', 'Trip', $trip->id);
+            }
         });
 
         return $trip->fresh();

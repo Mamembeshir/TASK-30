@@ -32,6 +32,13 @@ class TripDetail extends Component
      */
     public string $holdIdempotencyKey = '';
 
+    /**
+     * Stable idempotency key for joinWaitlist — same rationale as
+     * $holdIdempotencyKey. Participates in the universal service-layer
+     * idempotency contract enforced by WaitlistService::joinWaitlist.
+     */
+    public string $waitlistIdempotencyKey = '';
+
     public function mount(Trip $trip): void
     {
         // Visibility: TripList only surfaces PUBLISHED/FULL trips, but the
@@ -49,9 +56,11 @@ class TripDetail extends Component
         $this->trip = $trip;
 
         if (Auth::check()) {
-            // Deterministic key: same user + trip always produces the same string,
-            // so retries collapse onto the existing hold instead of generating a new one.
-            $this->holdIdempotencyKey = 'hold-' . Auth::id() . '-' . $trip->id;
+            // Deterministic keys: same user + trip always produces the same string,
+            // so retries collapse onto the existing hold / waitlist entry instead
+            // of generating a new one.
+            $this->holdIdempotencyKey     = 'hold-' . Auth::id() . '-' . $trip->id;
+            $this->waitlistIdempotencyKey = 'waitlist-' . Auth::id() . '-' . $trip->id;
         }
 
         $this->loadUserState();
@@ -107,7 +116,7 @@ class TripDetail extends Component
         }
 
         try {
-            $entry                 = $waitlistService->joinWaitlist($this->trip, Auth::user());
+            $entry                 = $waitlistService->joinWaitlist($this->trip, Auth::user(), $this->waitlistIdempotencyKey);
             $this->myWaitlistEntry = $entry;
             $this->dispatch('notify', type: 'success', message: "You've been added to the waitlist at position {$entry->position}.");
         } catch (\RuntimeException $e) {
@@ -143,7 +152,10 @@ class TripDetail extends Component
         }
 
         try {
-            $waitlistService->declineOffer($this->myWaitlistEntry);
+            $waitlistService->declineOffer(
+                $this->myWaitlistEntry,
+                'waitlist.decline.' . $this->myWaitlistEntry->id,
+            );
             $this->loadUserState();
             $this->dispatch('notify', type: 'info', message: 'Offer declined.');
         } catch (\RuntimeException $e) {

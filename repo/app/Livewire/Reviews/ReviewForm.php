@@ -59,11 +59,18 @@ class ReviewForm extends Component
                 );
                 $this->dispatch('notify', type: 'success', message: 'Review updated.');
             } else {
+                // Deterministic key: REV-02 already enforces one review per
+                // (user, trip), so the key is the same natural-key pair. A
+                // double-click returns the first review instead of 422-ing
+                // on the natural-key guard.
+                $idempotencyKey = "review:{$this->trip->id}:" . Auth::id();
+
                 $reviewService->create(
                     $this->trip,
                     Auth::user(),
                     $this->rating,
-                    $this->reviewText ?: null
+                    $this->reviewText ?: null,
+                    $idempotencyKey
                 );
                 $this->dispatch('notify', type: 'success', message: 'Review submitted. Thank you!');
             }

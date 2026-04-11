@@ -208,7 +208,7 @@ it('transitions refund from PENDING to APPROVED', function () {
     $approver = User::factory()->create();
     $refund   = Refund::factory()->pending()->create();
 
-    $result = app(MembershipService::class)->approveRefund($refund, $approver);
+    $result = app(MembershipService::class)->approveRefund($refund, $approver, mkIdem());
 
     expect($result->status)->toBe(RefundStatus::APPROVED)
         ->and((string) $result->approved_by)->toBe((string) $approver->id);
@@ -218,8 +218,21 @@ it('rejects approving a non-PENDING refund', function () {
     $approver = User::factory()->create();
     $refund   = Refund::factory()->approved()->create();
 
-    expect(fn () => app(MembershipService::class)->approveRefund($refund, $approver))
+    expect(fn () => app(MembershipService::class)->approveRefund($refund, $approver, mkIdem()))
         ->toThrow(RuntimeException::class, 'Only PENDING refunds');
+});
+
+it('approveRefund is idempotent on the same key', function () {
+    $approver = User::factory()->create();
+    $refund   = Refund::factory()->pending()->create();
+    $key      = mkIdem();
+    $svc      = app(MembershipService::class);
+
+    $first  = $svc->approveRefund($refund, $approver, $key);
+    $second = $svc->approveRefund($refund->fresh(), $approver, $key);
+
+    expect($first->id)->toBe($second->id)
+        ->and($second->status)->toBe(RefundStatus::APPROVED);
 });
 
 // ── MEM-07: Process Refund ────────────────────────────────────────────────────
@@ -238,7 +251,7 @@ it('full refund sets order to REFUNDED and terminates membership', function () {
         'refund_type' => RefundType::FULL->value,
     ]);
 
-    app(MembershipService::class)->processRefund($refund);
+    app(MembershipService::class)->processRefund($refund, mkIdem());
 
     $order->refresh();
     expect($order->status)->toBe(OrderStatus::REFUNDED)
@@ -259,7 +272,7 @@ it('partial refund sets order to PARTIALLY_REFUNDED and keeps membership active'
         'refund_type' => RefundType::PARTIAL->value,
     ]);
 
-    app(MembershipService::class)->processRefund($refund);
+    app(MembershipService::class)->processRefund($refund, mkIdem());
 
     $order->refresh();
     expect($order->status)->toBe(OrderStatus::PARTIALLY_REFUNDED)
@@ -269,6 +282,29 @@ it('partial refund sets order to PARTIALLY_REFUNDED and keeps membership active'
 it('rejects processing a non-APPROVED refund', function () {
     $refund = Refund::factory()->pending()->create();
 
-    expect(fn () => app(MembershipService::class)->processRefund($refund))
+    expect(fn () => app(MembershipService::class)->processRefund($refund, mkIdem()))
         ->toThrow(RuntimeException::class, 'Only APPROVED refunds');
+});
+
+it('processRefund is idempotent on the same key', function () {
+    $user    = User::factory()->create();
+    $plan    = MembershipPlan::factory()->basic()->create();
+    $payment = Payment::factory()->for($user)->create(['amount_cents' => 4900]);
+    MembershipOrder::factory()->active()->for($user)->for($plan, 'plan')->create([
+        'payment_id'   => $payment->id,
+        'amount_cents' => 4900,
+    ]);
+    $refund = Refund::factory()->approved()->create([
+        'payment_id'  => $payment->id,
+        'amount_cents'=> 2000,
+        'refund_type' => RefundType::PARTIAL->value,
+    ]);
+    $key = mkIdem();
+    $svc = app(MembershipService::class);
+
+    $first  = $svc->processRefund($refund, $key);
+    $second = $svc->processRefund($refund->fresh(), $key);
+
+    expect($first->id)->toBe($second->id)
+        ->and($second->status)->toBe(RefundStatus::PROCESSED);
 });

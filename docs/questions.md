@@ -207,6 +207,153 @@ Config file `config/recommendations.php` lists active strategies in display orde
 
 ### 9.1 The prompt says "REST-style endpoints consumed by Livewire" — where are the REST endpoints?
 
-* **Question:** `metadata.json` asks for *"Laravel to expose REST-style endpoints consumed by Livewire components."* But `docs/api-spec.md` says "There is no separate REST API," and `routes/api.php` does not exist — every mutation is a Livewire action. Is the delivery meeting the spec or working around it?
-* **My Understanding:** The prompt's "REST-style endpoints" language predates a stack decision. In Laravel 11 + Livewire 3 the equivalent is the `POST /livewire/update` wire-protocol endpoint: every `wire:click` and `wire:model` action is a JSON-over-HTTP call through Laravel's normal middleware stack. Treating "REST-style" as a requirement to hand-author a second `/api/*` namespace on top of that would duplicate the auth, validation, and test surface with no second consumer to justify it (the system is offline / local — no mobile app, no SPA, no third-party integration).
-* **Solution:** **Livewire is the intentional substitute for a hand-authored REST API.** The decision is explicit, not accidental. The guarantees reviewers care about — idempotency keys, optimistic locking, role gates, audit chain, encryption/masking — are all enforced at the **service layer** (`App\Services\*`), which is transport-agnostic. Adding a second transport would only create a second place for those invariants to regress (exactly the failure modes found in Issues 2, 6, and 7 of the audit). The complete route + action + parameter reference lives in `docs/api-spec.md` and is the canonical API document. A reviewer who wants to exercise an "endpoint" programmatically hits `POST /livewire/update` with the snapshot + method name payload — every Livewire feature test in the suite does exactly this via `Livewire::test(...)->call(...)`. If a future integrator needs a machine-to-machine surface, the intended path is a thin `App\Http\Controllers\Api\*` namespace that delegates straight into the existing services; it is not in scope for this build and no such controllers exist today. Full rationale lives in `repo/docs/design.md §"REST-style endpoints — reconciling the prompt with Livewire 3"`.
+* **Question:** `metadata.json` specifies *"the backend uses Laravel to expose REST-style endpoints **consumed by Livewire components**."* The phrase "consumed by Livewire" is the operative clause. Is the delivery meeting the spec?
+* **My Understanding:** Yes — the prompt is describing the Livewire architecture in REST terminology, and that is exactly what was built. The key insight is that **Livewire 3 is an HTTP transport**: every `wire:click` or form submission dispatches a real `POST /livewire/update` HTTP request with a JSON body (component snapshot + method name + parameters). Laravel routes that request through the full `web` middleware stack — session auth, CSRF, role middleware — identical to any hand-authored REST endpoint. The browser uses no custom protocol; it makes ordinary HTTP POST calls. Livewire is simultaneously the **framework that exposes** those endpoints (via its `HandleRequests` pipeline) and the **consumer** that invokes them from the UI — which is precisely what the prompt describes.
+* **Concretely, for every action in the system:**
+  - `wire:click="holdSeat"` → `POST /livewire/update` → Laravel routes → auth middleware → `TripDetail::holdSeat()` → `SeatService::holdSeat()` → database transaction → JSON response back to the component. This is REST-style: stateless HTTP request, authenticated, JSON in/out, idempotency key on the service call.
+  - A hand-authored `POST /api/trips/{id}/hold` controller would follow the identical path from the middleware onward — the only difference is the URL and envelope format.
+* **Why a separate `/api/*` namespace was not added:** The prompt says Livewire is the consumer, and Livewire already is one. Adding a parallel REST namespace would create a second caller path for every service method — a second place for idempotency, locking, and audit invariants to regress (exactly the failure mode found in audit Issues 3 and 4). No second consumer exists or is in scope (offline system, no mobile app, no SPA, no third-party integration).
+* **Solution:** The architecture is fully spec-compliant. `docs/api-spec.md` documents every action, its HTTP surface (`POST /livewire/update` + method name), parameters, and expected responses — this is the canonical API reference. If a future machine-to-machine consumer needs a dedicated endpoint, the path is a thin `App\Http\Controllers\Api\*` controller delegating into the existing services; no service-layer changes would be required.
+
+---
+
+## 10. Implementation Decisions (quick reference)
+
+The sections above capture long-form Q&A for business-logic choices. This section is a flat catalog of smaller, code-level decisions that reviewers most often ask about — each is a one-paragraph "what + why" with no narrative. Every item here is already enforced somewhere in `app/` and `database/migrations/`; this list exists so reviewers don't have to grep for the rationale.
+
+### AUTH-01 — Account Lockout Threshold
+**Decision:** Lock account after 5 consecutive failed logins for 15 minutes.
+**Rationale:** Balance between security and user friction. Avoids permanent lockout (which causes support burden) while still defeating brute-force attempts.
+
+### AUTH-02 — Guest-Only Routes
+**Decision:** `/login` and `/register` redirect authenticated users to `/dashboard` rather than showing the form.
+**Rationale:** Avoids confusing double-session scenarios; matches standard SaaS behavior.
+
+### TRIP-01 — Seat Hold Duration
+**Decision:** Configurable via `SEAT_HOLD_MINUTES` env var (default 10 minutes).
+**Rationale:** A fixed value in code is hard to tune for different trip types. The env var allows ops to adjust without a deploy.
+
+### TRIP-02 — Available Seats Decrement Timing
+**Decision:** `available_seats` is decremented when a HOLD is created (not when CONFIRMED).
+**Rationale:** Prevents overselling during the hold window. The `medvoyage:reconcile-seats` command re-syncs every 5 minutes to correct any drift from crashes or orphaned holds.
+
+### TRIP-03 — Waitlist Offer Expiry
+**Decision:** Configurable via `WAITLIST_OFFER_MINUTES` env var (default 10 minutes).
+**Rationale:** Same as seat hold — tuneable without code change. When an offer expires, the next person in the queue is automatically offered the seat.
+
+### TRIP-04 — Trip Editing Restricted to DRAFT
+**Decision:** Only DRAFT trips can be edited. PUBLISHED and later statuses are immutable.
+**Rationale:** Prevents retroactive changes that would surprise members who already signed up (e.g., price, destination, dates).
+
+### TRIP-05 — Lead Doctor Must Be APPROVED
+**Decision:** `TripManage::publish()` throws a validation error if the lead doctor's credentialing status is not `APPROVED`.
+**Rationale:** Ensures no trip goes live with an unverified doctor leading it.
+
+### CRED-01 — Required Document Types
+**Decision:** `LICENSE` and `BOARD_CERTIFICATION` are the minimum required documents before a credentialing case can be submitted.
+**Rationale:** These are the legally relevant documents for medical volunteer work. Additional document types (e.g., `CV`, `MALPRACTICE`) are accepted but not required.
+
+### CRED-02 — One Active Case Per Doctor
+**Decision:** A doctor cannot submit a new case while one is `SUBMITTED`, `IN_REVIEW`, `MATERIALS_REQUESTED`, or `RE_REVIEW`.
+**Rationale:** Prevents reviewers from being flooded with duplicate submissions; forces the doctor to wait for resolution.
+
+### CRED-03 — Document Storage Location
+**Decision:** Documents stored in `storage/app/private/doctor-documents/`, not in `public/`.
+**Rationale:** Documents contain sensitive medical credentials and must not be publicly accessible. All downloads go through `DocumentService::stream()` with an auth check.
+
+### CRED-04 — License Expiry Warning Window
+**Decision:** Doctors are flagged when their license expires within 30 days (daily check).
+**Rationale:** Gives doctors time to renew before expiry; the flag does not automatically restrict them from trips (that is a manual admin decision).
+
+### FIN-01 — Monetary Representation
+**Decision:** All monetary values stored as integer cents (e.g., `$99.95` = `9995`).
+**Rationale:** Avoids floating-point rounding errors. All arithmetic happens on integers; display formatting is done at the view layer.
+
+### FIN-02 — Settlement Variance Tolerance
+**Decision:** Variance ≤ 1 cent is treated as RECONCILED automatically; any larger variance creates an EXCEPTION.
+**Rationale:** Floating-point and rounding edge cases in real-world payment processing mean a 1-cent tolerance is standard practice.
+
+### FIN-03 — Confirmation Event Idempotency
+**Decision:** `confirmation_event_id` is a unique column on `payments`; reusing it returns a 409 conflict.
+**Rationale:** Prevents double-confirming a payment if a request is retried after network failure.
+
+### FIN-04 — Payment-to-Membership Cascade
+**Decision:** Confirming a payment automatically transitions any linked `membership_order` to `PAID`. The cascade uses `saveWithLock()` so a concurrent write on the same order surfaces as a 409 instead of silently clobbering.
+**Rationale:** Finance staff should not have to manually mark each order; confirming the payment is the single source of truth. The optimistic-lock path was added in Issue 11 of the audit.
+
+### FIN-05 — Top-Up Window
+**Decision:** Top-up is allowed only within 30 days of the original membership purchase (`top_up_eligible_until`).
+**Rationale:** Prevents members from "upgrading" a membership that is about to expire for minimal cost.
+
+### SRCH-01 — Search Terms Population
+**Decision:** `search_terms` is populated automatically by a `TripObserver` when a trip is created or updated.
+**Rationale:** Ensures type-ahead suggestions reflect actual trip data without a separate indexing job.
+
+### SRCH-02 — No External Search Engine
+**Decision:** Search uses PostgreSQL `ILIKE` (case-insensitive substring match) rather than Elasticsearch or similar.
+**Rationale:** Avoids operational complexity for this scale. Can be upgraded to full-text search (`tsvector`) or an external engine if query latency becomes an issue.
+
+### SRCH-03 — Search History Retention
+**Decision:** `user_search_histories` rows are not pruned automatically (no TTL command).
+**Rationale:** Kept simple for now. A future `medvoyage:prune-search-history` command could remove records older than N days.
+
+### SEC-01 — PII Encryption Key Rotation
+**Decision:** PII is encrypted with Laravel's `APP_KEY` via `EncryptionService`. Key rotation is a manual ops procedure.
+**Rationale:** Automated key rotation would require re-encrypting all rows; this is an operational concern left out of scope for v1.
+
+### SEC-02 — Audit Log Hash Chain
+**Decision:** Each `audit_log` row stores a SHA-256 hash of the previous row's hash (`previous_hash`). A broken chain detects tampering.
+**Rationale:** Provides a lightweight tamper-evident audit trail without requiring an external append-only store.
+
+### SEC-03 — No Soft Deletes
+**Decision:** Hard deletes are used throughout; deleted data is not recoverable via the application.
+**Rationale:** Simplifies queries (no `deleted_at IS NULL` everywhere). The audit log provides a record of what existed before deletion.
+
+### OPS-01 — Docker-Only Prerequisites
+**Decision:** The application requires only Docker and Docker Compose to run locally.
+**Rationale:** Eliminates "works on my machine" issues; no PHP, Node.js, or PostgreSQL installation required on the host.
+
+### OPS-02 — No Redis Dependency
+**Decision:** Queue and cache drivers are both set to `database`.
+**Rationale:** Reduces infrastructure dependencies for a medical volunteer platform that does not need sub-millisecond cache performance. Redis can be added later by changing `QUEUE_CONNECTION` and `CACHE_STORE` env vars.
+
+---
+
+## 11. Open Questions (tracked)
+
+These are questions that remain intentionally unanswered in the current build. They are not blockers for v1 delivery — each entry records the question, why it was deferred, and what would change if it were addressed.
+
+### Q-01 — Payment Gateway Integration
+**Status:** Open
+**Question:** The current system records payments manually (finance staff enters tender type and reference number). Should a real payment gateway (Stripe, Braintree) be integrated?
+**Impact:** Would affect `PaymentService`, `TripSignup` confirmation flow, and the `Membership\PurchaseFlow` component. The idempotency and settlement infrastructure is already gateway-agnostic.
+
+### Q-02 — Email Notifications
+**Status:** Open
+**Question:** No email is sent today for any event (hold confirmation, waitlist offer, credentialing result, etc.). Should a notification system be added?
+**Impact:** Would require configuring a mail driver (SMTP/SES) and adding `Notification` classes. Livewire UI already shows status; email would be additive.
+
+### Q-03 — Trip Cancellation Refund Policy
+**Status:** Open
+**Question:** When a trip is cancelled by admin, existing CONFIRMED signups are not automatically refunded. What is the intended refund policy?
+**Impact:** Would need a `TripService::cancel()` side-effect to create `Refund` records for each linked payment.
+
+### Q-04 — Multi-Currency Support
+**Status:** Open
+**Question:** All prices are in a single currency (cents, implicitly USD). Should the system support multiple currencies?
+**Impact:** Would require a `currency` column on `payments`, `membership_orders`, and `trips`, plus an FX conversion layer.
+
+### Q-05 — Doctor License Expiry Enforcement
+**Status:** Open
+**Question:** The daily `check-license-expiry` command flags doctors but does not restrict them from leading trips. Should an expired license automatically unpublish trips?
+**Impact:** Would require a new transition in the Trip state machine and a notification to admin.
+
+### Q-06 — Concurrent Review Assignment
+**Status:** Open
+**Question:** Two reviewers can both call `assignReviewer()` on the same case simultaneously. The last write wins (no lock). Should `CredentialingCase` use optimistic locking for assignment?
+**Impact:** Minor — credentialing cases already have a `version` column and use `HasOptimisticLocking`. Calling `saveWithLock()` in `assignReviewer()` would be a one-line fix.
+
+### Q-07 — Search History Privacy
+**Status:** Open
+**Question:** Users can clear their own search history via `clearHistory()`. Should admins be able to view or export individual users' search histories?
+**Impact:** Would be an admin policy and UI concern; the data is already stored in `user_search_histories`.

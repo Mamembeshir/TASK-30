@@ -12,12 +12,20 @@ class CloseDailySettlement extends Command
 
     public function handle(SettlementService $service): int
     {
-        $date = $this->argument('date') ?? now()->toDateString();
+        // Default to the facility's local calendar date — NOT the server's
+        // APP_TIMEZONE (UTC). The scheduler fires this command at 23:59
+        // facility time; if we resolved `now()->toDateString()` in UTC,
+        // America/New_York 23:59 = 04:59 UTC *the next day*, so the command
+        // would close tomorrow's empty settlement instead of today's
+        // just-closed business day. The explicit `date` argument still wins
+        // when an operator is manually settling a specific historical date.
+        $facilityTz = config('app.facility_timezone', config('app.timezone', 'UTC'));
+        $date = $this->argument('date') ?? now($facilityTz)->toDateString();
 
-        $this->info("Closing settlement for {$date}...");
+        $this->info("Closing settlement for {$date} ({$facilityTz})...");
 
         try {
-            $settlement = $service->closeDailySettlement($date);
+            $settlement = $service->closeDailySettlement($date, 'settlement.close.' . $date);
             $this->info("Status: {$settlement->status->value}");
             $this->info("Payments: " . formatCurrency($settlement->total_payments_cents));
             $this->info("Refunds:  " . formatCurrency($settlement->total_refunds_cents));

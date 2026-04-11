@@ -29,15 +29,23 @@ class Register extends Component
             'email'      => ['required', 'email', 'unique:users,email'],
             'first_name' => ['required', 'string', 'max:100'],
             'last_name'  => ['required', 'string', 'max:100'],
-            // AUTH-01: min 10 chars, 1 upper, 1 lower, 1 digit, 1 special
+            // AUTH-01: min 10 chars, 1 upper, 1 lower, 1 digit, 1 special.
+            // NOTE: `->uncompromised()` is intentionally NOT used. It performs
+            // an outbound HTTPS call to the HaveIBeenPwned range API, which
+            // violates the "no internet at runtime" constraint (see
+            // docs/claude.md "What NOT to Do" → "No external API calls at
+            // runtime"). Local complexity rules are the authoritative check
+            // for this offline deployment. If a future build gains network
+            // access, re-enabling the breach check belongs behind a
+            // `medvoyage.auth.check_compromised_passwords` config flag that
+            // defaults to false.
             'password'   => [
                 'required',
                 'confirmed',
                 Password::min(10)
                     ->mixedCase()
                     ->numbers()
-                    ->symbols()
-                    ->uncompromised(),
+                    ->symbols(),
             ],
         ]);
 

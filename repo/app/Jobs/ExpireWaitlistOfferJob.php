@@ -36,6 +36,9 @@ class ExpireWaitlistOfferJob implements ShouldQueue
             return;
         }
 
-        $waitlistService->expireOffer($entry);
+        // Same deterministic key as ExpireWaitlistOffers cron so a race
+        // between the queue job and the polling safety-net collapses into
+        // a single recorded expiry.
+        $waitlistService->expireOffer($entry, 'waitlist.expire.' . $entry->id);
     }
 }

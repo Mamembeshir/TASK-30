@@ -59,12 +59,53 @@
                         <div>
                             <span class="font-medium text-[#111827]">{{ $doc->document_type->label() }}</span>
                             <span class="text-[#9CA3AF] ml-2">{{ $doc->fileSizeHuman() }} · {{ $doc->uploaded_at->format('M j, Y') }}</span>
+                            @if($doc->uploaded_by !== $case->doctor->user_id)
+                                <span class="ml-2 text-xs text-[#6B7280] italic">uploaded by staff</span>
+                            @endif
                         </div>
                         <a href="{{ route('credentialing.documents.download', $doc) }}" class="text-[#1B6B93] hover:underline">Download</a>
                     </div>
                 @empty
                     <p class="text-sm text-[#9CA3AF]">No documents uploaded.</p>
                 @endforelse
+
+                @if($canUpload)
+                    <div class="mt-4 pt-4 border-t border-[#E5E7EB]">
+                        <p class="text-xs font-semibold text-[#374151] uppercase tracking-wide mb-3">Upload on behalf of doctor</p>
+                        @error('staffUploadFile')
+                            <p class="mb-2 text-xs text-[#DC2626]">{{ $message }}</p>
+                        @enderror
+                        <form wire:submit="uploadDocument" class="space-y-3">
+                            <x-select
+                                wire:model="staffUploadType"
+                                label="Document type"
+                                :error="$errors->first('staffUploadType')"
+                                required
+                            >
+                                <option value="">Select type…</option>
+                                @foreach($documentTypes as $type)
+                                    <option value="{{ $type->value }}">{{ $type->label() }}</option>
+                                @endforeach
+                            </x-select>
+                            <div>
+                                <label class="block text-sm font-medium text-[#374151] mb-1">
+                                    File <span class="text-[#DC2626]">*</span>
+                                </label>
+                                <input
+                                    type="file"
+                                    wire:model="staffUploadFile"
+                                    accept=".pdf,.jpg,.jpeg,.png"
+                                    class="block w-full text-sm text-[#6B7280] file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-[#EFF6FF] file:text-[#1B6B93] hover:file:bg-[#DBEAFE]"
+                                />
+                                <p class="mt-1 text-xs text-[#9CA3AF]">PDF, JPEG, or PNG · max 10 MB</p>
+                            </div>
+                            <x-button type="submit" variant="secondary" size="sm" class="w-full justify-center" wire:loading.attr="disabled">
+                                <span wire:loading.remove wire:target="uploadDocument">Upload Document</span>
+                                <span wire:loading wire:target="uploadDocument">Uploading…</span>
+                            </x-button>
+                        </form>
+                    </div>
+                @endif
             </x-card>
 
             {{-- Action timeline --}}

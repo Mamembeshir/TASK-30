@@ -38,7 +38,8 @@ class SettlementDetail extends Component
                 $exception,
                 ExceptionStatus::from($this->resolutionType),
                 $this->resolutionNote,
-                auth()->user()
+                auth()->user(),
+                'settlement_exception.resolve.' . $exception->id,
             );
             $this->resolveExceptionId = null;
             $this->resolutionType     = '';
@@ -53,7 +54,10 @@ class SettlementDetail extends Component
     public function reReconcile(SettlementService $service): void
     {
         try {
-            $this->settlement = $service->reReconcile($this->settlement);
+            $this->settlement = $service->reReconcile(
+                $this->settlement,
+                'settlement.reconcile.' . $this->settlement->id,
+            );
             $this->dispatch('notify', type: 'success', message: 'Settlement reconciled.');
         } catch (\RuntimeException $e) {
             $this->addError('reconcile', $e->getMessage());

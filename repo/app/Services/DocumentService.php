@@ -88,6 +88,32 @@ class DocumentService
     }
 
     /**
+     * Determine whether a user may upload documents on behalf of a doctor.
+     *
+     * Object-level authorization rules (Audit Issue 5):
+     *  - Admins: always permitted.
+     *  - Credentialing reviewers: permitted only when they are the assigned
+     *    reviewer on the doctor's active (non-terminal) case.
+     *  - Everyone else (including the doctor themselves): use DoctorProfile.
+     */
+    public function canUploadFor(Doctor $doctor, User $actor): bool
+    {
+        if ($actor->isAdmin()) {
+            return true;
+        }
+
+        if (! $actor->isCredentialingReviewer()) {
+            return false;
+        }
+
+        $activeCase = $doctor->activeCase();
+
+        return $activeCase !== null
+            && $activeCase->assigned_reviewer === $actor->id
+            && ! $activeCase->status->isTerminal();
+    }
+
+    /**
      * Determine whether a user may download a document.
      * Allowed: the doctor themselves, the assigned reviewer, or any admin.
      */
@@ -109,5 +135,46 @@ class DocumentService
         }
 
         return false;
+    }
+
+    /**
+     * Authorize, audit, and return a download response for a doctor document.
+     *
+     * Every download call emits a `doctor_document.downloaded` audit entry
+     * (audit Issue 5 — export traceability). Authorization is enforced here
+     * so the route is a one-liner and no caller can emit the file without
+     * passing through the audit hook.
+     *
+     * @throws RuntimeException 403 if the user is not permitted to download,
+     *                          404 if the underlying file is missing.
+     */
+    public function download(DoctorDocument $doc, User $user): \Symfony\Component\HttpFoundation\StreamedResponse
+    {
+        if (! $this->canDownload($doc, $user)) {
+            throw new RuntimeException('You are not authorised to download this document.', 403);
+        }
+
+        if (! Storage::disk('local')->exists($doc->file_path)) {
+            throw new RuntimeException('File not found.', 404);
+        }
+
+        AuditService::record(
+            action:     'doctor_document.downloaded',
+            entityType: 'DoctorDocument',
+            entityId:   $doc->id,
+            before:     null,
+            after:      [
+                'doctor_id'     => $doc->doctor_id,
+                'document_type' => $doc->document_type instanceof \BackedEnum
+                                    ? $doc->document_type->value
+                                    : $doc->document_type,
+                'file_name'     => $doc->file_name,
+                'checksum'      => $doc->checksum,
+            ],
+        );
+
+        return Storage::disk('local')->download($doc->file_path, $doc->file_name, [
+            'Content-Type' => $doc->mime_type,
+        ]);
     }
 }

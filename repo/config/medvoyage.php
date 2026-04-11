@@ -18,12 +18,4 @@ return [
     */
     'waitlist_offer_minutes' => (int) env('WAITLIST_OFFER_MINUTES', 10),
 
-    /*
-    |--------------------------------------------------------------------------
-    | Idempotency TTL
-    |--------------------------------------------------------------------------
-    | How long (in hours) idempotency records are retained.
-    */
-    'idempotency_ttl_hours' => (int) env('IDEMPOTENCY_TTL_HOURS', 24),
-
 ];

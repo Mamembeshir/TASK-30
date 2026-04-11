@@ -26,7 +26,10 @@ class RefundApproval extends Component
         $refund = Refund::findOrFail($id);
 
         try {
-            $service->approveRefund($refund, auth()->user());
+            // Deterministic per-refund key so that a double-click collapses
+            // to a no-op (returning the already-APPROVED row) instead of
+            // 422'ing on the second submit.
+            $service->approveRefund($refund, auth()->user(), 'refund.approve.' . $refund->id);
         } catch (RuntimeException $e) {
             $this->error = $e->getMessage();
             return;
@@ -40,7 +43,7 @@ class RefundApproval extends Component
         $refund = Refund::findOrFail($id);
 
         try {
-            $service->processRefund($refund);
+            $service->processRefund($refund, 'refund.process.' . $refund->id);
         } catch (RuntimeException $e) {
             $this->error = $e->getMessage();
             return;

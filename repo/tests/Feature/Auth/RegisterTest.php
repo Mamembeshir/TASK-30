@@ -4,6 +4,7 @@ use App\Enums\UserRole;
 use App\Enums\UserStatus;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
@@ -136,4 +137,31 @@ it('rejects mismatched password confirmation', function () {
         ->set('password_confirmation', 'DifferentPass1!')
         ->call('register')
         ->assertHasErrors('password');
+});
+
+// ── Offline constraint regression (Audit Issue 1) ─────────────────────────────
+//
+// The audit flagged `Password::uncompromised()` because it calls the
+// HaveIBeenPwned range API over the internet, which violates the
+// "no network at runtime" constraint documented in docs/claude.md. This test
+// pins the fix: registration with a strong password must succeed without any
+// outbound HTTP call. `Http::preventStrayRequests()` makes the test fail loudly
+// if anything inside the register flow tries to reach the network.
+
+it('completes registration with zero outbound HTTP calls (offline regression)', function () {
+    Http::preventStrayRequests();
+    Http::fake(); // empty fake — any actual call would now trigger the prevention guard
+
+    Livewire::test(\App\Livewire\Auth\Register::class)
+        ->set('username', 'offlineuser')
+        ->set('email', 'offline@example.com')
+        ->set('first_name', 'Offline')
+        ->set('last_name', 'User')
+        ->set('password', 'Secure!Pass1')
+        ->set('password_confirmation', 'Secure!Pass1')
+        ->call('register')
+        ->assertHasNoErrors()
+        ->assertRedirect(route('dashboard'));
+
+    expect(User::where('email', 'offline@example.com')->exists())->toBeTrue();
 });

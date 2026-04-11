@@ -36,7 +36,10 @@ class PaymentDetail extends Component
     public function void(PaymentService $service): void
     {
         try {
-            $this->payment = $service->voidPayment($this->payment);
+            $this->payment = $service->voidPayment(
+                $this->payment,
+                'payment.void.' . $this->payment->id,
+            );
             $this->showVoidConfirm = false;
             $this->dispatch('notify', type: 'success', message: 'Payment voided.');
         } catch (\RuntimeException $e) {

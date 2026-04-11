@@ -79,13 +79,15 @@ it('AuditLogViewer filters by actor (email/username/uuid)', function () {
 it('AuditLogViewer filters by date range', function () {
     $admin = adminUser();
 
-    $old = \App\Models\AuditLog::record($admin->id, 'action.old',    'X', null);
-    \App\Models\AuditLog::record($admin->id,        'action.recent', 'X', null);
+    // The audit log is append-only at both the model layer *and* the
+    // PostgreSQL layer (BEFORE UPDATE/DELETE trigger — audit Issue 4), so
+    // we cannot backdate an existing row. Instead we travel back in time
+    // before writing the old entry so its created_at is genuinely old.
+    \Illuminate\Support\Carbon::setTestNow(now()->subDays(10));
+    \App\Models\AuditLog::record($admin->id, 'action.old', 'X', null);
+    \Illuminate\Support\Carbon::setTestNow(); // back to real time
 
-    // Backdate one entry without violating the append-only model rule
-    // (model::updating throws), so go directly through the query builder.
-    \App\Models\AuditLog::query()->where('id', $old->id)
-        ->update(['created_at' => now()->subDays(10)]);
+    \App\Models\AuditLog::record($admin->id, 'action.recent', 'X', null);
 
     $page = Livewire::actingAs($admin)
         ->test(AuditLogViewer::class)

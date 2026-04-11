@@ -96,7 +96,7 @@ it('transitions linked membership order to PAID on confirm', function () {
 it('voids a RECORDED payment', function () {
     $payment = Payment::factory()->recorded()->create();
 
-    $voided = app(PaymentService::class)->voidPayment($payment);
+    $voided = app(PaymentService::class)->voidPayment($payment, (string) Str::uuid());
 
     expect($voided->status)->toBe(PaymentStatus::VOIDED);
 });
@@ -104,7 +104,7 @@ it('voids a RECORDED payment', function () {
 it('voids a CONFIRMED payment', function () {
     $payment = Payment::factory()->confirmed()->create();
 
-    $voided = app(PaymentService::class)->voidPayment($payment);
+    $voided = app(PaymentService::class)->voidPayment($payment, (string) Str::uuid());
 
     expect($voided->status)->toBe(PaymentStatus::VOIDED);
 });
@@ -112,8 +112,20 @@ it('voids a CONFIRMED payment', function () {
 it('rejects voiding an already-voided payment', function () {
     $payment = Payment::factory()->create(['status' => PaymentStatus::VOIDED->value]);
 
-    expect(fn () => app(PaymentService::class)->voidPayment($payment))
+    expect(fn () => app(PaymentService::class)->voidPayment($payment, (string) Str::uuid()))
         ->toThrow(RuntimeException::class);
+});
+
+it('voidPayment is idempotent on the same key', function () {
+    $payment = Payment::factory()->recorded()->create();
+    $key     = (string) Str::uuid();
+    $svc     = app(PaymentService::class);
+
+    $first  = $svc->voidPayment($payment, $key);
+    $second = $svc->voidPayment($payment->fresh(), $key);
+
+    expect($first->id)->toBe($second->id)
+        ->and($second->status)->toBe(PaymentStatus::VOIDED);
 });
 
 it('voids linked membership order on void', function () {
@@ -125,7 +137,7 @@ it('voids linked membership order on void', function () {
         'status'     => OrderStatus::PENDING->value,
     ]);
 
-    app(PaymentService::class)->voidPayment($payment);
+    app(PaymentService::class)->voidPayment($payment, (string) Str::uuid());
 
     expect($order->fresh()->status)->toBe(OrderStatus::VOIDED);
 });
@@ -164,7 +176,7 @@ it('voidPayment increments MembershipOrder.version on cascaded VOID', function (
         'version'    => 3,
     ]);
 
-    app(PaymentService::class)->voidPayment($payment);
+    app(PaymentService::class)->voidPayment($payment, (string) Str::uuid());
 
     expect($order->fresh()->version)->toBe(4)
         ->and($order->fresh()->status)->toBe(OrderStatus::VOIDED);

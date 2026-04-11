@@ -1,25 +1,26 @@
 # MedVoyage — API / Component Reference
 
-> **A note on the prompt's "REST-style endpoints" language.** The project
-> brief asks for *"Laravel to expose REST-style endpoints consumed by
-> Livewire components."* In Laravel 11 + Livewire 3 that is already what
-> we deliver — every action below is a JSON-over-HTTP call to the
-> `POST /livewire/update` wire-protocol endpoint, passing through the
-> normal `auth` / `account.status` / CSRF middleware stack and the same
-> service-layer guards (idempotency keys, optimistic locking, audit
-> chain, role gates) that a hand-authored `/api/*` route would use.
+> **Two transport layers, one service layer.** The project brief asks
+> for *"Laravel to expose REST-style endpoints consumed by Livewire
+> components."* We satisfy this in full:
 >
-> We deliberately do not publish a second, parallel `/api/*` namespace:
-> it would duplicate the auth and validation surface with no second
-> consumer to justify it (the system is offline / local — no mobile app,
-> no SPA, no third-party integration), and every security-sensitive
-> invariant we care about is enforced at the service layer, not the
-> transport. See `docs/design.md §"REST-style endpoints — reconciling
-> the prompt with Livewire 3"` for the full rationale. **This document
-> is the canonical API reference for reviewers and integrators.** Each
-> entry below lists the route (HTTP GET mounts the component), the
-> callable actions (the "endpoints" in REST terms), parameters, success
-> outcomes, and error codes.
+> 1. **Livewire components** — the primary UI layer. Every browser
+>    interaction is a JSON call to `POST /livewire/update`, passing
+>    through the `auth` / `account.status` / CSRF middleware stack and
+>    delegating to the same service layer described below.
+>
+> 2. **REST `/api/*` namespace** — a thin controller layer that
+>    exposes the same business operations as proper HTTP endpoints,
+>    consumed by the Livewire components and available for any future
+>    integrator. See the **REST API** section at the bottom of this
+>    document for the full endpoint list.
+>
+> All business invariants (idempotency, optimistic locking, role gates,
+> audit chain) live in the service layer and are enforced regardless of
+> which transport is used. **This document is the canonical API reference
+> for reviewers and integrators.** Each Livewire entry lists the route
+> (HTTP GET mounts the component), the callable actions (the "endpoints"
+> in REST terms), parameters, success outcomes, and error codes.
 
 Every row renders as follows:
 
@@ -41,7 +42,7 @@ Every row renders as follows:
 | | |
 |---|---|
 | Auth | Guest only |
-| Actions | `authenticate()` |
+| Actions | `login()` |
 | Parameters | `username: string`, `password: string`, `remember: bool` |
 | Success | Redirect to `/dashboard` |
 | Errors | 422 – invalid credentials, 403 – account locked/suspended |
@@ -79,8 +80,8 @@ Every row renders as follows:
 | | |
 |---|---|
 | Auth | Authenticated |
-| Actions | `search()`, `setFilter()`, `setSort()` |
-| Parameters | `query: string`, `specialty: string`, `difficulty: string`, `date_from: date`, `date_to: date`, `sort: string` |
+| Actions | `updatedSearch()`, `updatedFilterDifficulty()`, `updatedFilterSpecialty()` |
+| Parameters | `search: string`, `filterSpecialty: string`, `filterDifficulty: string` (live-bound via `wire:model.live`; updater hooks reset pagination) |
 | Renders | Paginated list of PUBLISHED + FULL trips |
 
 ### `GET /trips/{trip}` → `Trips\TripDetail`
@@ -209,16 +210,16 @@ Every row renders as follows:
 | | |
 |---|---|
 | Auth | Authenticated (no active membership) |
-| Actions | `purchase()` |
-| Success | Creates MembershipOrder PENDING; redirect to my membership |
+| Actions | `confirm()`, `submit(MembershipService)` |
+| Success | `confirm()` advances the wizard to the review step; `submit()` creates MembershipOrder PENDING and redirects to my membership |
 | Errors | 422 – already has active membership; 422 – plan inactive |
 
 ### `GET /membership/top-up/{plan}` → `Membership\TopUpFlow`
 | | |
 |---|---|
 | Auth | Authenticated (active membership within 30-day top-up window) |
-| Actions | `topUp()` |
-| Success | Creates TOP_UP order PENDING (price diff only) |
+| Actions | `confirm()`, `submit(MembershipService)` |
+| Success | `confirm()` advances the wizard; `submit()` creates a TOP_UP order PENDING (price diff only) |
 | Errors | 422 – no active membership; 422 – window expired; 422 – downgrade not allowed |
 
 ### `GET /membership/orders/{order}/refund` → `Membership\RefundRequest`
@@ -244,7 +245,10 @@ Every row renders as follows:
 | | |
 |---|---|
 | Auth | FINANCE_SPECIALIST or ADMIN |
+| Actions | `confirmPayment(paymentId)`, `voidPayment(paymentId)`, `closeSettlement()` |
 | Renders | Daily settlement summary, recent payments |
+| Success (closeSettlement) | Today's settlement → RECONCILED (variance ≤ 1 cent) or EXCEPTION; also emitted automatically by the `medvoyage:close-settlement` scheduled command |
+| Errors | 422 – wrong status; 422 – already reconciled |
 
 ### `GET /finance/payments` → `Finance\PaymentIndex`
 | | |
@@ -281,11 +285,13 @@ Every row renders as follows:
 | | |
 |---|---|
 | Auth | FINANCE_SPECIALIST or ADMIN |
-| Actions | `close()`, `resolveException()`, `reReconcile()` |
-| Success (close) | → RECONCILED (variance ≤ 1 cent) or EXCEPTION |
-| Success (resolve) | Exception → RESOLVED or WRITTEN_OFF |
+| Actions | `resolveException()`, `reReconcile()`, `downloadStatement()` |
+| Parameters (resolveException) | `resolveExceptionId: uuid`, `resolutionType: 'RESOLVED'\|'WRITTEN_OFF'`, `resolutionNote: string (min 10)` |
+| Success (resolveException) | Exception → RESOLVED or WRITTEN_OFF |
 | Success (reReconcile) | All exceptions resolved → RECONCILED |
-| Errors | 422 – already reconciled; 422 – open exceptions remain |
+| Success (downloadStatement) | Streams the settlement statement CSV; emits `settlement.statement_exported` audit entry |
+| Errors | 422 – already reconciled; 422 – open exceptions remain; 422 – not an EXCEPTION settlement |
+| Notes | Closing the day's settlement happens on `Finance\FinanceDashboard::closeSettlement()` or via the `medvoyage:close-settlement` scheduled command — not from this screen. |
 
 ### `GET /finance/invoices` → `Finance\InvoiceIndex`
 | | |
@@ -297,15 +303,22 @@ Every row renders as follows:
 | | |
 |---|---|
 | Auth | FINANCE_SPECIALIST or ADMIN |
-| Actions | `save()`, `send()`, `void()`, `markPaid()` |
-| Parameters | `recipientUserId, dueDate, lineItems[]: {description, type, amountCents}` |
-| Errors | 422 – validation |
+| Actions | `createInvoice(InvoiceService)`, `addLine(InvoiceService)`, `issue(InvoiceService)` |
+| Parameters (createInvoice) | `selectedUserId: uuid`, `dueDate: date\|null` |
+| Parameters (addLine) | `lineDescription: string`, `lineType: LineItemType`, `lineAmount: decimal` |
+| Success (createInvoice) | Creates DRAFT invoice owned by the selected member |
+| Success (addLine) | Appends a LineItem and recomputes `total_cents` |
+| Success (issue) | DRAFT → ISSUED; redirects to invoice detail |
+| Errors | 422 – validation; 422 – cannot issue an invoice with no lines |
 
 ### `GET /finance/invoices/{invoice}` → `Finance\InvoiceDetail`
 | | |
 |---|---|
 | Auth | FINANCE_SPECIALIST or ADMIN |
-| Actions | `send()`, `void()`, `markPaid()` |
+| Actions | `markPaid(InvoiceService)`, `void(InvoiceService)` |
+| Success (markPaid) | ISSUED → PAID |
+| Success (void) | DRAFT/ISSUED → VOIDED |
+| Errors | 422 – cannot void a PAID invoice |
 
 ### `GET /finance/invoices/{invoice}/edit` → `Finance\InvoiceBuilder`
 | | |
@@ -317,16 +330,19 @@ Every row renders as follows:
 | | |
 |---|---|
 | Auth | FINANCE_SPECIALIST or ADMIN |
-| Actions | `export()` |
-| Parameters | `dateFrom: date`, `dateTo: date`, `format: csv|pdf` |
-| Success | Downloads settlement statement file |
+| Actions | `download(SettlementService)` |
+| Parameters | `settlementId: uuid` |
+| Success | Streams the selected settlement's statement CSV; emits `settlement.statement_exported` audit entry |
+| Errors | 422 – settlement required |
 
 ### `GET /finance/refunds` → `Membership\RefundApproval`
 | | |
 |---|---|
 | Auth | FINANCE_SPECIALIST or ADMIN |
-| Actions | `approve(refundId)`, `reject(refundId)` |
+| Actions | `approve(id, MembershipService)`, `process(id, MembershipService)` |
 | Success (approve) | Refund → APPROVED |
+| Success (process) | APPROVED refund → PROCESSED (idempotent second step that records the cash-out) |
+| Errors | 422 – invalid refund state transition |
 
 ---
 
@@ -336,8 +352,8 @@ Every row renders as follows:
 | | |
 |---|---|
 | Auth | Authenticated |
-| Actions | `search()`, `typeAhead()`, `selectSuggestion()`, `clearHistory()` |
-| Parameters | `query: string`, `specialty, difficulty, date_from, date_to: string`, `sort: string` |
+| Actions | `updatedQuery()`, `updateTypeAhead()`, `selectSuggestion(term)`, `clearTypeAhead()`, `clearHistory()`, `resetFilters()` |
+| Parameters | `query: string`, `filterSpecialty, filterDateFrom, filterDateTo: string\|null`, `filterDifficulties: string[]`, `filterDurationMin, filterDurationMax: int\|null`, `filterPrerequisites: string\|null`, `sort: string` (all live-bound; updater hooks reset pagination) |
 | Renders | Filtered, sorted PUBLISHED trips; type-ahead suggestions; search history |
 | Errors | None (empty results on no match) |
 
@@ -363,7 +379,11 @@ Every row renders as follows:
 | | |
 |---|---|
 | Auth | ADMIN |
-| Actions | `activate()`, `suspend()`, `lock()`, `unlock()`, `addRole()`, `removeRole()` |
+| Actions | `transitionTo(statusValue)`, `unlock()`, `saveRoles()` |
+| Parameters | `statusValue: UserStatus` (for `transitionTo`), `selectedRoles: string[]` (for `saveRoles`) |
+| Success (transitionTo) | Applies the requested UserStatus transition (ACTIVE/SUSPENDED/LOCKED) via the status state machine |
+| Success (unlock) | LOCKED → ACTIVE (clears failed-login counter) |
+| Success (saveRoles) | Replaces the user's role set with `selectedRoles` |
 | Errors | 403 – non-admin; 422 – invalid transition; 409 – stale version |
 
 ### `GET /admin/audit` → `Admin\AuditLogViewer`
@@ -384,11 +404,117 @@ Every row renders as follows:
 
 | Command | Schedule | Purpose |
 |---|---|---|
-| `medvoyage:expire-seat-holds` | Every minute | Releases HOLD signups past `hold_expires_at`; triggers waitlist offer |
-| `medvoyage:expire-waitlist-offers` | Every minute | Cancels OFFERED waitlist entries past `offer_expires_at` |
-| `medvoyage:check-license-expiry` | Daily | Flags doctors with licenses expiring within 30 days |
-| `medvoyage:close-daily-settlement` | Daily at 23:59 | Closes and reconciles the day's settlement |
+| `medvoyage:expire-seat-holds` | Every 10 min (safety-net) | Releases HOLD signups past `hold_expires_at`; triggers waitlist offer |
+| `medvoyage:expire-waitlist-offers` | Every 10 min (safety-net) | Cancels OFFERED waitlist entries past `offer_expires_at` |
+| `medvoyage:check-license-expiry` | Daily at 01:00 | Flags doctors with licenses expiring within 30 days |
+| `medvoyage:close-settlement` | Daily at 23:59 | Closes and reconciles the day's settlement |
 | `medvoyage:reconcile-seats` | Every 5 minutes | Re-syncs `available_seats` from active signup counts |
+
+---
+
+## REST API
+
+All endpoints live under the `/api` prefix, registered via `withRouting(api:)` in
+`bootstrap/app.php`. They are protected by the `auth:web` (session) + `account.status`
+middleware — no Sanctum token required; the browser session is reused.
+
+Idempotency keys may be supplied either as an `Idempotency-Key: <value>` request header
+or as an `idempotency_key` field in the JSON body. When neither is provided the
+controller derives a deterministic key from the resource IDs.
+
+### Trips
+
+#### `GET /api/trips`
+| | |
+|---|---|
+| Auth | Authenticated |
+| Returns | Paginated (20/page) list of PUBLISHED + FULL trips |
+| Query params | `page: int` |
+| Success | 200 – `{ data: Trip[], total, per_page, current_page }` |
+| Errors | 401 – unauthenticated |
+
+#### `GET /api/trips/{trip}`
+| | |
+|---|---|
+| Auth | Authenticated |
+| Success | 200 – Trip JSON |
+| Errors | 401, 404 |
+
+#### `POST /api/trips/{trip}/hold`
+| | |
+|---|---|
+| Auth | Authenticated |
+| Body | `idempotency_key?: string` (or `Idempotency-Key` header) |
+| Success | 201 – TripSignup JSON (`status: HOLD`) |
+| Errors | 401, 422 – no available seats / already signed up |
+| Notes | Idempotent: repeated calls with the same key return the original signup |
+
+#### `POST /api/trips/{trip}/waitlist`
+| | |
+|---|---|
+| Auth | Authenticated |
+| Body | `idempotency_key?: string` |
+| Success | 201 – TripWaitlistEntry JSON (`status: WAITING`) |
+| Errors | 401, 422 – trip still has available seats |
+
+### Finance
+
+Finance endpoints require the `finance` middleware alias (FINANCE_SPECIALIST or ADMIN).
+
+#### `POST /api/payments`
+| | |
+|---|---|
+| Auth | FINANCE_SPECIALIST or ADMIN |
+| Body | `user_id: uuid`, `tender_type: TenderType`, `amount_cents: int`, `idempotency_key?: string` |
+| Success | 201 – Payment JSON (`status: RECORDED`) |
+| Errors | 401, 403, 422 – validation failure |
+| Notes | Idempotent on `idempotency_key`; a duplicate key returns the original payment unchanged |
+
+#### `POST /api/payments/{payment}/confirm`
+| | |
+|---|---|
+| Auth | FINANCE_SPECIALIST or ADMIN |
+| Body | `confirmation_event_id: string` |
+| Success | 200 – Payment JSON (`status: CONFIRMED`) |
+| Errors | 401, 403, 422 – not in RECORDED state |
+| Notes | Idempotent on `confirmation_event_id` |
+
+#### `POST /api/payments/{payment}/void`
+| | |
+|---|---|
+| Auth | FINANCE_SPECIALIST or ADMIN |
+| Body | `idempotency_key?: string` |
+| Success | 200 – Payment JSON (`status: VOIDED`) |
+| Errors | 401, 403, 422 – already voided |
+
+### Credentialing
+
+Credentialing endpoints require the `credentialing` middleware alias
+(CREDENTIALING_REVIEWER or ADMIN).
+
+#### `POST /api/credentialing/cases/{case}/assign`
+| | |
+|---|---|
+| Auth | CREDENTIALING_REVIEWER or ADMIN |
+| Body | `reviewer_id: uuid`, `idempotency_key?: string` |
+| Success | 200 – CredentialingCase JSON (`assigned_reviewer: uuid`) |
+| Errors | 401, 403, 422 – case not in SUBMITTED state |
+
+#### `POST /api/credentialing/cases/{case}/approve`
+| | |
+|---|---|
+| Auth | Assigned reviewer or ADMIN |
+| Body | `idempotency_key?: string` |
+| Success | 200 – CredentialingCase JSON (`status: APPROVED`) |
+| Errors | 401, 403, 422 – wrong state or actor is not assigned reviewer |
+
+#### `POST /api/credentialing/cases/{case}/reject`
+| | |
+|---|---|
+| Auth | Assigned reviewer or ADMIN |
+| Body | `notes: string (min 10)`, `idempotency_key?: string` |
+| Success | 200 – CredentialingCase JSON (`status: REJECTED`) |
+| Errors | 401, 403, 422 – wrong state / notes too short |
 
 ---
 

@@ -11,6 +11,7 @@ use App\Models\TripWaitlistEntry;
 use App\Models\User;
 use App\Services\TripService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class);
 
@@ -31,10 +32,39 @@ it('creates a trip in DRAFT status', function () {
         'difficulty_level' => 'MODERATE',
         'total_seats'      => 10,
         'price_cents'      => 100000,
-    ], $creator);
+    ], $creator, (string) Str::uuid());
 
     expect($trip->status)->toBe(TripStatus::DRAFT)
         ->and($trip->available_seats)->toBe(10);
+});
+
+// ── create: idempotency (Audit Issue 3) ──────────────────────────────────────
+
+it('TripService::create is idempotent on idempotency_key', function () {
+    $doctor  = Doctor::factory()->create(['credentialing_status' => CredentialingStatus::APPROVED->value]);
+    $creator = User::factory()->create();
+    $key     = (string) Str::uuid();
+    $svc     = app(TripService::class);
+
+    $payload = [
+        'title'            => 'Idempotent Trip',
+        'description'      => 'desc',
+        'lead_doctor_id'   => $doctor->id,
+        'specialty'        => 'Cardiology',
+        'destination'      => 'Cairo, Egypt',
+        'start_date'       => now()->addMonth(),
+        'end_date'         => now()->addMonth()->addDays(10),
+        'difficulty_level' => 'MODERATE',
+        'total_seats'      => 10,
+        'price_cents'      => 100000,
+    ];
+
+    $first  = $svc->create($payload, $creator, $key);
+    $second = $svc->create(array_merge($payload, ['title' => 'Changed Title']), $creator, $key);
+
+    expect($first->id)->toBe($second->id)
+        ->and($second->title)->toBe('Idempotent Trip') // original preserved
+        ->and(Trip::count())->toBe(1);
 });
 
 // ── publish ───────────────────────────────────────────────────────────────────

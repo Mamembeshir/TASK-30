@@ -23,5 +23,4 @@ return [
     // Business rules
     'seat_hold_minutes'       => (int) env('SEAT_HOLD_MINUTES', 10),
     'waitlist_offer_minutes'  => (int) env('WAITLIST_OFFER_MINUTES', 10),
-    'idempotency_ttl_hours'   => (int) env('IDEMPOTENCY_TTL_HOURS', 24),
 ];

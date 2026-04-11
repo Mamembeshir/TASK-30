@@ -77,25 +77,49 @@ patch. Under the hood:
   gates, success redirects, and error codes lives in
   `docs/api-spec.md` and is treated as the canonical API reference.
 
-**We deliberately do not publish a second, parallel `/api/*` namespace.**
-Doing so would duplicate the auth stack, validation layer, and test
-surface with no second consumer to justify it (the system is offline /
-local — there is no mobile app, no SPA, no third-party integration).
-Every historical vulnerability class we care about — refund ownership
-checks (Issue 2), trip-visibility oracles (Issue 7), idempotency misses
-(Issue 6) — would then have two places to regress instead of one. The
-service-layer guarantees are transport-agnostic; a second transport adds
-risk without reducing it.
+**Two transport layers share a single service layer.**
 
-If a future integrator needs a machine-to-machine surface, the intended
-path is a thin `App\Http\Controllers\Api\*` namespace that **delegates
-directly to the same services** the Livewire components call. That
-preserves the "one guard, one rule book" property. It is not in scope
-for this build and no such controllers exist today.
+A thin `App\Http\Controllers\Api\*` namespace exposes the same operations
+as the Livewire components via proper REST routes registered under the
+`/api` prefix (`routes/api.php`, `bootstrap/app.php`).  The REST layer:
 
-All mutations happen through **Livewire actions** (the
-`POST /livewire/update` wire-protocol endpoint). There are no standalone
-REST routes.
+- delegates exclusively to the same services the Livewire components call
+  — there is no duplicated business logic;
+- is protected by the same session guard (`auth:web`) plus CSRF
+  verification (`VerifyApiCsrfToken`) and role-gating middleware
+  (`account.status`, `finance`, `credentialing`);
+- carries the same idempotency-key contract: `Idempotency-Key` header or
+  `idempotency_key` body field is accepted on every mutation and
+  propagated to the service layer.
+
+Current REST surface (see `docs/api-spec.md §"REST API"` for the full
+reference):
+
+| Method | Path | Role gate |
+|---|---|---|
+| GET | `/api/trips` | authenticated |
+| GET | `/api/trips/{trip}` | authenticated (PUBLISHED/FULL only; admin sees all) |
+| POST | `/api/trips/{trip}/hold` | authenticated |
+| POST | `/api/trips/{trip}/waitlist` | authenticated |
+| POST | `/api/payments` | `finance` |
+| POST | `/api/payments/{payment}/confirm` | `finance` |
+| POST | `/api/payments/{payment}/void` | `finance` |
+| POST | `/api/credentialing/cases/{case}/assign` | `credentialing` |
+| POST | `/api/credentialing/cases/{case}/approve` | `credentialing` |
+| POST | `/api/credentialing/cases/{case}/reject` | `credentialing` |
+
+**Why the "one guard, one rule book" property is preserved:** every
+security-sensitive invariant — ownership checks, idempotency deduplication,
+state-machine transitions, audit logging — lives at the service layer, not
+at the transport.  Adding a second transport does not add a second place for
+those invariants to regress; it adds a second entry point that reaches the
+same guard.
+
+Livewire component mutations still go through `POST /livewire/update`
+(the wire-protocol endpoint) and continue to be the primary UI path.
+The REST layer exists to satisfy the prompt's "REST-style endpoints
+consumed by Livewire components" requirement and to provide a documented
+machine-to-machine surface.
 
 ### Scheduled Commands
 
@@ -472,7 +496,7 @@ SUBMITTED ──startReview()──► IN_REVIEW
 | `user_profiles` | `user_id (pk, fk)`, `first_name`, `last_name`, `address_encrypted`, `ssn_fragment_encrypted` | 1-to-1 with users; PII encrypted |
 | `user_roles` | `user_id`, `role` | No timestamps; use `addRole()` / `removeRole()` |
 | `sessions` | `id`, `user_id`, `payload` | DB-backed sessions |
-| `audit_logs` | `id`, `actor_id`, `action`, `entity_type`, `entity_id`, `before_data`, `after_data`, `previous_hash` | Append-only; tamper-evident chain via `previous_hash` |
+| `audit_logs` | `id`, `actor_id`, `action`, `entity_type`, `entity_id`, `before_data`, `after_data`, `previous_hash`, `row_hash` | Append-only (PG trigger + model hooks); `row_hash` chain verified by `medvoyage:verify-audit-chain` |
 
 ### Credentialing
 
@@ -490,7 +514,7 @@ SUBMITTED ──startReview()──► IN_REVIEW
 | `trips` | `lead_doctor_id`, `status`, `available_seats`, `booking_count`, `average_rating`, `version` | `HasOptimisticLocking` |
 | `trip_signups` | `trip_id`, `user_id`, `status`, `hold_expires_at`, `idempotency_key`, `version` | `idempotency_key` unique |
 | `seat_holds` | `signup_id (unique)`, `expires_at`, `released`, `release_reason` | 1-to-1 with signup |
-| `trip_waitlist_entries` | `trip_id`, `user_id` (unique), `position`, `status`, `offer_expires_at` | — |
+| `trip_waitlist_entries` | `trip_id`, `user_id` (unique), `position`, `status`, `offer_expires_at`, `idempotency_key` (unique) | — |
 | `trip_reviews` | `(trip_id, user_id)` unique, `rating (1-5)`, `status` | `HasOptimisticLocking` |
 
 ### Membership
@@ -552,9 +576,14 @@ SUBMITTED ──startReview()──► IN_REVIEW
 
 ### Audit Trail
 
-- `AuditService::log()` is called for every significant action (role change, trip publish, payment confirm, case approve/reject, etc.).
-- Each row stores `before_data` / `after_data` as JSONB and a `previous_hash` (SHA-256 of the prior row) forming a tamper-evident chain.
-- Append-only: no `updated_at`; no `UPDATE` on `audit_logs`.
+- `AuditService::log()` is called for every significant action (role change, trip publish, payment confirm, case approve/reject, statement/document export, etc.).
+- Each row stores `before_data` / `after_data` as JSONB.
+- **Export traceability (audit Issue 5):** every export path emits an audit entry. `SettlementService::exportStatement()` records `settlement.statement_exported` (with the `regenerated` flag), and `DocumentService::download()` records `doctor_document.downloaded` with the doc type and checksum. Route closures delegate to these service methods so no export path can short-circuit the audit hook.
+- **Tamper-evidence is enforced at three independent layers** (audit Issue 4):
+  1. **Model layer:** `AuditLog::updating` / `deleting` hooks throw `LogicException`. No `updated_at`.
+  2. **Database layer:** PostgreSQL `BEFORE UPDATE` / `BEFORE DELETE` triggers on `audit_logs` raise an exception, blocking bypass via the query builder or raw SQL.
+  3. **Cryptographic layer:** every row stores `row_hash` = SHA-256 over a canonicalized payload (id, action, entity, actor, before/after, correlation/idempotency, created_at, **previous_hash**). Rows form a chain; `row_hash` of row N is the `previous_hash` of row N+1.
+- Verification: `php artisan medvoyage:verify-audit-chain` walks the chain and fails on the first row whose `previous_hash` doesn't match the preceding `row_hash` or whose `row_hash` doesn't match its recomputed canonical value. Pin the current head hash out-of-band (e.g., log it to a WORM store) to make retroactive forgery detectable.
 
 ### File Security
 
@@ -573,6 +602,7 @@ accepts a caller-supplied `idempotencyKey` and dedupes on it by looking up a
 | Domain write | Backing column |
 |---|---|
 | Seat hold | `trip_signups.idempotency_key` |
+| Waitlist join | `trip_waitlist_entries.idempotency_key` |
 | Payment record | `payments.idempotency_key` |
 | Membership purchase / renew / top-up | `membership_orders.idempotency_key` |
 | Refund request | `refunds.idempotency_key` |

@@ -41,30 +41,25 @@ Route::middleware(['auth', 'account.status'])->group(function () {
     });
 
     // ── Credentialing ─────────────────────────────────────────────────────────
-    // Doctor's own profile + docs + case management
+    // Doctor's own profile + docs — available to any authenticated doctor
     Route::get('/credentialing/profile', \App\Livewire\Credentialing\DoctorProfile::class)->name('credentialing.profile');
 
-    // Reviewer / admin: case list + detail
-    Route::get('/credentialing/cases',        \App\Livewire\Credentialing\CaseList::class)->name('credentialing.cases');
-    Route::get('/credentialing/cases/{case}', \App\Livewire\Credentialing\CaseDetail::class)->name('credentialing.cases.show');
+    // Reviewer / admin: case list + detail — route-level guard (defense-in-depth
+    // on top of the component mount() checks that were already present)
+    Route::middleware('credentialing')->group(function () {
+        Route::get('/credentialing/cases',        \App\Livewire\Credentialing\CaseList::class)->name('credentialing.cases');
+        Route::get('/credentialing/cases/{case}', \App\Livewire\Credentialing\CaseDetail::class)->name('credentialing.cases.show');
+    });
 
-    // Document download — access-checked in controller
+    // Document download — service layer enforces authz AND emits the audit
+    // entry (`doctor_document.downloaded`) so every export is traceable.
     Route::get('/credentialing/documents/{document}/download', function (\App\Models\DoctorDocument $document) {
-        $service = new \App\Services\DocumentService();
-
-        if (! $service->canDownload($document, auth()->user())) {
-            abort(403, 'You are not authorised to download this document.');
+        try {
+            return (new \App\Services\DocumentService())
+                ->download($document, auth()->user());
+        } catch (\RuntimeException $e) {
+            abort($e->getCode() ?: 500, $e->getMessage());
         }
-
-        $path = storage_path('app/' . $document->file_path);
-
-        if (! file_exists($path)) {
-            abort(404, 'File not found.');
-        }
-
-        return response()->download($path, $document->file_name, [
-            'Content-Type' => $document->mime_type,
-        ]);
     })->name('credentialing.documents.download');
 
     // Redirect old /credentialing routes — doctors go to their profile, everyone else to the case list.
@@ -83,21 +78,22 @@ Route::middleware(['auth', 'account.status'])->group(function () {
     Route::get('/membership/orders/{order}/refund',                  \App\Livewire\Membership\RefundRequest::class)->name('membership.refund');
     Route::get('/membership/orders', \App\Livewire\Membership\OrderHistory::class)->name('membership.orders');
 
-    // Finance — refund approval (Finance Specialist or Admin)
-    Route::get('/finance/refunds', \App\Livewire\Membership\RefundApproval::class)->name('finance.refunds');
-
-    // Finance
-    Route::get('/finance',                              \App\Livewire\Finance\FinanceDashboard::class)->name('finance.index');
-    Route::get('/finance/payments',                     \App\Livewire\Finance\PaymentIndex::class)->name('finance.payments');
-    Route::get('/finance/payments/record',              \App\Livewire\Finance\PaymentRecord::class)->name('finance.payments.record');
-    Route::get('/finance/payments/{payment}',           \App\Livewire\Finance\PaymentDetail::class)->name('finance.payments.show');
-    Route::get('/finance/settlements',                  \App\Livewire\Finance\SettlementIndex::class)->name('finance.settlements');
-    Route::get('/finance/settlements/{settlement}',     \App\Livewire\Finance\SettlementDetail::class)->name('finance.settlements.show');
-    Route::get('/finance/invoices',                     \App\Livewire\Finance\InvoiceIndex::class)->name('finance.invoices');
-    Route::get('/finance/invoices/create',              \App\Livewire\Finance\InvoiceBuilder::class)->name('finance.invoices.create');
-    Route::get('/finance/invoices/{invoice}',           \App\Livewire\Finance\InvoiceDetail::class)->name('finance.invoices.show');
-    Route::get('/finance/invoices/{invoice}/edit',      \App\Livewire\Finance\InvoiceBuilder::class)->name('finance.invoices.edit');
-    Route::get('/finance/statements/export',            \App\Livewire\Finance\StatementExport::class)->name('finance.statements.export');
+    // Finance — all routes require FINANCE_SPECIALIST or ADMIN at the routing layer.
+    // Component mount() checks are retained as defense-in-depth.
+    Route::middleware('finance')->group(function () {
+        Route::get('/finance/refunds',                      \App\Livewire\Membership\RefundApproval::class)->name('finance.refunds');
+        Route::get('/finance',                              \App\Livewire\Finance\FinanceDashboard::class)->name('finance.index');
+        Route::get('/finance/payments',                     \App\Livewire\Finance\PaymentIndex::class)->name('finance.payments');
+        Route::get('/finance/payments/record',              \App\Livewire\Finance\PaymentRecord::class)->name('finance.payments.record');
+        Route::get('/finance/payments/{payment}',           \App\Livewire\Finance\PaymentDetail::class)->name('finance.payments.show');
+        Route::get('/finance/settlements',                  \App\Livewire\Finance\SettlementIndex::class)->name('finance.settlements');
+        Route::get('/finance/settlements/{settlement}',     \App\Livewire\Finance\SettlementDetail::class)->name('finance.settlements.show');
+        Route::get('/finance/invoices',                     \App\Livewire\Finance\InvoiceIndex::class)->name('finance.invoices');
+        Route::get('/finance/invoices/create',              \App\Livewire\Finance\InvoiceBuilder::class)->name('finance.invoices.create');
+        Route::get('/finance/invoices/{invoice}',           \App\Livewire\Finance\InvoiceDetail::class)->name('finance.invoices.show');
+        Route::get('/finance/invoices/{invoice}/edit',      \App\Livewire\Finance\InvoiceBuilder::class)->name('finance.invoices.edit');
+        Route::get('/finance/statements/export',            \App\Livewire\Finance\StatementExport::class)->name('finance.statements.export');
+    });
 
     // Search & Recommendations
     Route::get('/search',           \App\Livewire\Search\TripSearch::class)->name('search');

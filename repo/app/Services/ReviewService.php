@@ -7,6 +7,7 @@ use App\Enums\SignupStatus;
 use App\Models\Trip;
 use App\Models\TripReview;
 use App\Models\User;
+use App\Services\IdempotencyStore;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
@@ -15,20 +16,32 @@ class ReviewService
     /**
      * REV-01: user must have a CONFIRMED signup on a trip that has already ended.
      * REV-02: one review per user per trip.
+     *
+     * Participates in the universal service-layer idempotency contract
+     * (`docs/design.md:70-73`, audit Issue 3). The REV-02 natural-key guard
+     * catches the "already reviewed" case at the logical level, but an
+     * explicit `$idempotencyKey` lets genuine retries (double-click, network
+     * blip) return the first review instead of throwing a 422.
      */
-    public function create(Trip $trip, User $user, int $rating, ?string $text): TripReview
+    public function create(Trip $trip, User $user, int $rating, ?string $text, string $idempotencyKey): TripReview
     {
+        $existingByKey = TripReview::where('idempotency_key', $idempotencyKey)->first();
+        if ($existingByKey) {
+            return $existingByKey;
+        }
+
         $this->assertEligible($trip, $user);
         $this->assertRating($rating);
 
-        return DB::transaction(function () use ($trip, $user, $rating, $text) {
+        return DB::transaction(function () use ($trip, $user, $rating, $text, $idempotencyKey) {
             $review = TripReview::create([
-                'trip_id'     => $trip->id,
-                'user_id'     => $user->id,
-                'rating'      => $rating,
-                'review_text' => $text,
-                'status'      => ReviewStatus::ACTIVE->value,
-                'version'     => 1,
+                'trip_id'         => $trip->id,
+                'user_id'         => $user->id,
+                'rating'          => $rating,
+                'review_text'     => $text,
+                'status'          => ReviewStatus::ACTIVE->value,
+                'version'         => 1,
+                'idempotency_key' => $idempotencyKey,
             ]);
 
             $this->recomputeAverageRating($trip);
@@ -45,8 +58,13 @@ class ReviewService
     /**
      * Author may update their own ACTIVE review.
      */
-    public function update(TripReview $review, User $author, int $rating, ?string $text): TripReview
+    public function update(TripReview $review, User $author, int $rating, ?string $text, ?string $idempotencyKey = null): TripReview
     {
+        $store = new IdempotencyStore();
+        if ($idempotencyKey && $store->alreadyProcessed($idempotencyKey, 'review.update', $review->id)) {
+            return $review->fresh();
+        }
+
         if ($review->user_id !== $author->id) {
             throw new RuntimeException('You can only edit your own review.', 403);
         }
@@ -57,7 +75,7 @@ class ReviewService
 
         $this->assertRating($rating);
 
-        return DB::transaction(function () use ($review, $rating, $text) {
+        return DB::transaction(function () use ($review, $rating, $text, $idempotencyKey, $store) {
             $before = ['rating' => $review->rating, 'review_text' => $review->review_text];
 
             $review->rating      = $rating;
@@ -71,6 +89,10 @@ class ReviewService
                 'review_text' => $text,
             ]);
 
+            if ($idempotencyKey) {
+                $store->record($idempotencyKey, 'review.update', 'TripReview', $review->id);
+            }
+
             return $review->fresh();
         });
     }
@@ -78,13 +100,18 @@ class ReviewService
     /**
      * Admin: flag a review — hides it from the trip page.
      */
-    public function flag(TripReview $review): TripReview
+    public function flag(TripReview $review, ?string $idempotencyKey = null): TripReview
     {
+        $store = new IdempotencyStore();
+        if ($idempotencyKey && $store->alreadyProcessed($idempotencyKey, 'review.flag', $review->id)) {
+            return $review->fresh();
+        }
+
         if ($review->status !== ReviewStatus::ACTIVE) {
             throw new RuntimeException('Only ACTIVE reviews can be flagged.', 422);
         }
 
-        return DB::transaction(function () use ($review) {
+        return DB::transaction(function () use ($review, $idempotencyKey, $store) {
             $before         = ['status' => $review->status->value];
             $review->status = ReviewStatus::FLAGGED;
             $review->saveWithLock();
@@ -95,6 +122,10 @@ class ReviewService
                 'status' => ReviewStatus::FLAGGED->value,
             ]);
 
+            if ($idempotencyKey) {
+                $store->record($idempotencyKey, 'review.flag', 'TripReview', $review->id);
+            }
+
             return $review->fresh();
         });
     }
@@ -102,13 +133,18 @@ class ReviewService
     /**
      * Admin: permanently remove a review.
      */
-    public function remove(TripReview $review): TripReview
+    public function remove(TripReview $review, ?string $idempotencyKey = null): TripReview
     {
+        $store = new IdempotencyStore();
+        if ($idempotencyKey && $store->alreadyProcessed($idempotencyKey, 'review.remove', $review->id)) {
+            return $review->fresh();
+        }
+
         if ($review->status === ReviewStatus::REMOVED) {
             throw new RuntimeException('Review is already removed.', 422);
         }
 
-        return DB::transaction(function () use ($review) {
+        return DB::transaction(function () use ($review, $idempotencyKey, $store) {
             $before         = ['status' => $review->status->value];
             $review->status = ReviewStatus::REMOVED;
             $review->saveWithLock();
@@ -118,6 +154,10 @@ class ReviewService
             AuditService::record('review.removed', 'TripReview', $review->id, $before, [
                 'status' => ReviewStatus::REMOVED->value,
             ]);
+
+            if ($idempotencyKey) {
+                $store->record($idempotencyKey, 'review.remove', 'TripReview', $review->id);
+            }
 
             return $review->fresh();
         });

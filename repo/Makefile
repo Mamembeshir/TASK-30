@@ -1,4 +1,4 @@
-.PHONY: setup serve down migrate seed test test-unit test-feature coverage shell tinker fresh
+.PHONY: setup serve down migrate seed test test-unit test-feature coverage shell tinker fresh docs-check
 
 # Build and start (detached)
 setup:
@@ -41,3 +41,24 @@ shell:
 
 tinker:
 	docker compose exec app php artisan tinker
+
+# Verify that command names in docs match what exists in source.
+# Run this after changing any artisan command signature or scheduled cadence.
+docs-check:
+	@echo "=== Checking scheduled command names in docs/api-spec.md vs app/Console/Commands/ ==="
+	@# Only check commands that appear in the scheduler (routes/console.php).
+	@# Dev-only utilities (db:seed-demo, medvoyage:verify-audit-chain, …) are
+	@# not scheduled and intentionally absent from api-spec.md.
+	@for sig in $$(grep -h 'protected \$$signature' app/Console/Commands/*.php | grep -oE "'[^']+'" | tr -d "'" | cut -d' ' -f1); do \
+	    grep -qF "$$sig" routes/console.php || continue; \
+	    grep -q "$$sig" docs/api-spec.md \
+	    && echo "  OK  $$sig" \
+	    || echo "  MISSING  $$sig  (scheduled in console.php but not in docs/api-spec.md)"; \
+	done
+	@echo "=== Checking middleware names in README.md vs app/Http/Middleware/ ==="
+	@for mw in $$(ls app/Http/Middleware/ | sed 's/Middleware\.php$$//; s/\.php$$//'); do \
+	    grep -q "$$mw" README.md \
+	    && echo "  OK  $$mw" \
+	    || echo "  MISSING  $$mw  (in Middleware/ but not in README.md)"; \
+	done
+	@echo "Done."

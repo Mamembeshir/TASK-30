@@ -19,6 +19,7 @@ class TripWaitlistEntry extends Model
         'status',
         'offered_at',
         'offer_expires_at',
+        'idempotency_key',
     ];
 
     protected function casts(): array

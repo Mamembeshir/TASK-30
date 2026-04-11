@@ -142,7 +142,7 @@ it('member lifecycle: register → search → hold → confirm → review', func
     // Review after trip ends (close the trip, set end_date in past)
     $trip->forceFill(['status' => TripStatus::CLOSED->value, 'end_date' => now()->subDay()])->save();
 
-    $review = app(ReviewService::class)->create($trip->fresh(), $user, 4, 'Great trip!');
+    $review = app(ReviewService::class)->create($trip->fresh(), $user, 4, 'Great trip!', (string) Str::uuid());
 
     expect($review->rating)->toBe(4)
         ->and($review->trip_id)->toBe($trip->id);
@@ -170,20 +170,20 @@ it('doctor lifecycle: create → upload docs → submit → assign → review �
     $credService = app(CredentialingService::class);
 
     // Submit case
-    $case = $credService->submitCase($doctor->fresh(), $docUser);
+    $case = $credService->submitCase($doctor->fresh(), $docUser, (string) Str::uuid());
     expect($case->status)->toBe(CaseStatus::SUBMITTED);
     expect($doctor->fresh()->credentialing_status)->toBe(CredentialingStatus::UNDER_REVIEW);
 
     // Assign reviewer
-    $credService->assignReviewer($case, $reviewer, $admin);
+    $credService->assignReviewer($case, $reviewer, $admin, Str::uuid()->toString());
     expect($case->fresh()->assigned_reviewer)->toBe($reviewer->id);
 
     // Start review
-    $credService->startReview($case->fresh(), $reviewer);
+    $credService->startReview($case->fresh(), $reviewer, Str::uuid()->toString());
     expect($case->fresh()->status)->toBe(CaseStatus::INITIAL_REVIEW);
 
     // Approve
-    $credService->approve($case->fresh(), $reviewer);
+    $credService->approve($case->fresh(), $reviewer, Str::uuid()->toString());
     expect($case->fresh()->status)->toBe(CaseStatus::APPROVED);
     expect($doctor->fresh()->credentialing_status)->toBe(CredentialingStatus::APPROVED);
 
@@ -203,19 +203,19 @@ it('credentialing rejection: submit → reject → new case → approve', functi
 
     $credService = app(CredentialingService::class);
 
-    $case = $credService->submitCase($doctor->fresh(), $docUser);
-    $credService->assignReviewer($case, $reviewer, $reviewer);
-    $credService->startReview($case->fresh(), $reviewer);
-    $credService->reject($case->fresh(), $reviewer, 'Documents are not legible.');
+    $case = $credService->submitCase($doctor->fresh(), $docUser, (string) Str::uuid());
+    $credService->assignReviewer($case, $reviewer, $reviewer, Str::uuid()->toString());
+    $credService->startReview($case->fresh(), $reviewer, Str::uuid()->toString());
+    $credService->reject($case->fresh(), $reviewer, 'Documents are not legible.', Str::uuid()->toString());
 
     expect($case->fresh()->status)->toBe(CaseStatus::REJECTED);
     expect($doctor->fresh()->credentialing_status)->toBe(CredentialingStatus::REJECTED);
 
     // Submit a new case after rejection
-    $case2 = $credService->submitCase($doctor->fresh(), $docUser);
-    $credService->assignReviewer($case2, $reviewer, $reviewer);
-    $credService->startReview($case2->fresh(), $reviewer);
-    $credService->approve($case2->fresh(), $reviewer);
+    $case2 = $credService->submitCase($doctor->fresh(), $docUser, (string) Str::uuid());
+    $credService->assignReviewer($case2, $reviewer, $reviewer, Str::uuid()->toString());
+    $credService->startReview($case2->fresh(), $reviewer, Str::uuid()->toString());
+    $credService->approve($case2->fresh(), $reviewer, Str::uuid()->toString());
 
     expect($doctor->fresh()->credentialing_status)->toBe(CredentialingStatus::APPROVED);
 });
@@ -231,21 +231,21 @@ it('credentialing: submit → request materials → resubmit → approve', funct
 
     $credService = app(CredentialingService::class);
 
-    $case = $credService->submitCase($doctor->fresh(), $docUser);
-    $credService->assignReviewer($case, $reviewer, $reviewer);
-    $credService->startReview($case->fresh(), $reviewer);
-    $credService->requestMaterials($case->fresh(), $reviewer, 'Please upload a clearer copy of your license.');
+    $case = $credService->submitCase($doctor->fresh(), $docUser, (string) Str::uuid());
+    $credService->assignReviewer($case, $reviewer, $reviewer, Str::uuid()->toString());
+    $credService->startReview($case->fresh(), $reviewer, Str::uuid()->toString());
+    $credService->requestMaterials($case->fresh(), $reviewer, 'Please upload a clearer copy of your license.', Str::uuid()->toString());
 
     expect($case->fresh()->status)->toBe(CaseStatus::MORE_MATERIALS_REQUESTED);
     expect($doctor->fresh()->credentialing_status)->toBe(CredentialingStatus::MORE_MATERIALS_REQUESTED);
 
     // Doctor uploads additional document and resubmits
     DoctorDocument::factory()->create(['doctor_id' => $doctor->id, 'document_type' => DocumentType::LICENSE, 'uploaded_by' => $docUser->id]);
-    $credService->receiveMaterials($case->fresh(), $docUser);
+    $credService->receiveMaterials($case->fresh(), $docUser, Str::uuid()->toString());
     expect($case->fresh()->status)->toBe(CaseStatus::RE_REVIEW);
 
     // Approve the re-reviewed case
-    $credService->approve($case->fresh(), $reviewer);
+    $credService->approve($case->fresh(), $reviewer, Str::uuid()->toString());
     expect($doctor->fresh()->credentialing_status)->toBe(CredentialingStatus::APPROVED);
 });
 
@@ -256,14 +256,17 @@ it('seat hold expiry: hold → time passes → job expires hold → seat release
     $member = wfUser([UserRole::MEMBER]);
     $waiter = wfUser([UserRole::MEMBER]);
 
-    // Waiter joins the waitlist while seat is still available
-    $waitEntry = app(WaitlistService::class)->joinWaitlist($trip, $waiter);
-    expect($waitEntry->status)->toBe(WaitlistStatus::WAITING);
-
-    // Member holds the last seat
+    // Member holds the last seat first — the trip must reach zero
+    // availability before the waitlist can legitimately accept an entry
+    // (FIN audit Issue 3: waitlist is a *full-trip* construct, not a
+    // parallel channel to the normal hold flow).
     $signup = app(SeatService::class)->holdSeat($trip, $member, Str::uuid()->toString());
     expect($signup->status)->toBe(SignupStatus::HOLD);
     expect($trip->fresh()->available_seats)->toBe(0);
+
+    // Now — with the trip at zero available — the waiter joins the queue.
+    $waitEntry = app(WaitlistService::class)->joinWaitlist($trip->fresh(), $waiter, Str::uuid()->toString());
+    expect($waitEntry->status)->toBe(WaitlistStatus::WAITING);
 
     // Advance clock past hold expiry
     Carbon::setTestNow(now()->addMinutes(11));
@@ -296,7 +299,7 @@ it('waitlist flow: full trip → join waitlist → confirmed cancels → offered
     expect($trip->fresh()->status)->toBe(TripStatus::FULL);
 
     // Waiter joins the waitlist
-    $waitEntry = app(WaitlistService::class)->joinWaitlist($trip->fresh(), $waiter);
+    $waitEntry = app(WaitlistService::class)->joinWaitlist($trip->fresh(), $waiter, Str::uuid()->toString());
     expect($waitEntry->status)->toBe(WaitlistStatus::WAITING);
 
     // Confirmed member cancels → seat released → waitlist offered
@@ -349,8 +352,8 @@ it('membership: purchase BASIC → top-up to PREMIUM → refund top-up → BASIC
     );
 
     // Approve → process
-    $refund = $memberService->approveRefund($refund->fresh(), $finance);
-    $refund = $memberService->processRefund($refund->fresh());
+    $refund = $memberService->approveRefund($refund->fresh(), $finance, Str::uuid()->toString());
+    $refund = $memberService->processRefund($refund->fresh(), Str::uuid()->toString());
 
     expect($refund->status->value)->toBe('PROCESSED');
     expect($topUpOrder->fresh()->status)->toBe(OrderStatus::REFUNDED);
@@ -370,21 +373,26 @@ it('finance: record → confirm → void (cascade) → new → confirm → close
     // Record and confirm a payment, then void it
     $p1 = $payService->recordPayment($member, TenderType::CASH, 5000, null, Str::uuid()->toString());
     $p1 = $payService->confirmPayment($p1, Str::uuid()->toString());
-    $p1 = $payService->voidPayment($p1->fresh());
+    $p1 = $payService->voidPayment($p1->fresh(), Str::uuid()->toString());
     expect($p1->status)->toBe(PaymentStatus::VOIDED);
 
-    // Record and confirm a new payment
+    // Record and confirm a new payment, then wire it to a CONFIRMED signup
+    // against a $50 trip. That signup is the obligation side of the
+    // reconciliation: closeDailySettlement() will derive
+    // expected_amount_cents from the linked trip price, not from a
+    // pre-stamped row — so expected == net == 5000 → variance 0 →
+    // RECONCILED without any fixture data planted on the settlement row.
     $p2 = $payService->recordPayment($member, TenderType::CARD_ON_FILE, 5000, null, Str::uuid()->toString());
     $p2 = $payService->confirmPayment($p2, Str::uuid()->toString());
     expect($p2->status)->toBe(PaymentStatus::CONFIRMED);
 
-    // Pre-seed settlement with expected_amount matching net (5000) → variance = 0 → reconciled
-    Settlement::firstOrCreate(
-        ['settlement_date' => $date],
-        ['status' => SettlementStatus::OPEN->value, 'total_payments_cents' => 0, 'total_refunds_cents' => 0, 'net_amount_cents' => 0, 'expected_amount_cents' => 5000, 'variance_cents' => 0, 'version' => 1]
-    );
+    $trip = Trip::factory()->create(['price_cents' => 5000]);
+    TripSignup::factory()->confirmed()->create([
+        'trip_id'    => $trip->id,
+        'payment_id' => $p2->id,
+    ]);
 
-    $settlement = $settService->closeDailySettlement($date);
+    $settlement = $settService->closeDailySettlement($date, Str::uuid()->toString());
 
     expect($settlement->status)->toBe(SettlementStatus::RECONCILED);
     expect($settlement->total_payments_cents)->toBe(5000);
@@ -400,17 +408,20 @@ it('settlement exception: variance → exception flagged → resolve → re-reco
     $settService = app(SettlementService::class);
     $date        = now()->toDateString();
 
-    // Confirm a payment of 10000
+    // Confirm a payment of 10000, then wire it to a CONFIRMED signup against
+    // a $50 trip. The obligation side says the member owed 5000 but the cash
+    // side collected 10000 — a deliberate overcollection that the
+    // reconciliation must surface as a 5000 variance → EXCEPTION.
     $p = $payService->recordPayment($member, TenderType::CASH, 10000, null, Str::uuid()->toString());
     $p = $payService->confirmPayment($p, Str::uuid()->toString());
 
-    // Settlement expects 5000 but net is 10000 → variance 5000 → EXCEPTION
-    Settlement::firstOrCreate(
-        ['settlement_date' => $date],
-        ['status' => SettlementStatus::OPEN->value, 'total_payments_cents' => 0, 'total_refunds_cents' => 0, 'net_amount_cents' => 0, 'expected_amount_cents' => 5000, 'variance_cents' => 0, 'version' => 1]
-    );
+    $trip = Trip::factory()->create(['price_cents' => 5000]);
+    TripSignup::factory()->confirmed()->create([
+        'trip_id'    => $trip->id,
+        'payment_id' => $p->id,
+    ]);
 
-    $settlement = $settService->closeDailySettlement($date);
+    $settlement = $settService->closeDailySettlement($date, Str::uuid()->toString());
 
     expect($settlement->status)->toBe(SettlementStatus::EXCEPTION);
     expect($settlement->variance_cents)->toBe(5000);
@@ -424,13 +435,14 @@ it('settlement exception: variance → exception flagged → resolve → re-reco
         $exception,
         ExceptionStatus::RESOLVED,
         'Variance accounted for: extra batch confirmed correct.',
-        $financeUser
+        $financeUser,
+        Str::uuid()->toString()
     );
 
     expect($exception->fresh()->status)->toBe(ExceptionStatus::RESOLVED);
 
     // Re-reconcile after all exceptions are resolved
-    $settlement = $settService->reReconcile($settlement->fresh());
+    $settlement = $settService->reReconcile($settlement->fresh(), Str::uuid()->toString());
     expect($settlement->status)->toBe(SettlementStatus::RECONCILED);
 });
 
@@ -475,7 +487,7 @@ it('concurrent seats: second hold on last seat is rejected; user can join waitli
         ->toThrow(RuntimeException::class);
 
     // Second user joins the waitlist instead
-    $waitEntry = app(WaitlistService::class)->joinWaitlist($trip->fresh(), $user2);
+    $waitEntry = app(WaitlistService::class)->joinWaitlist($trip->fresh(), $user2, Str::uuid()->toString());
     expect($waitEntry->status)->toBe(WaitlistStatus::WAITING);
 });
 

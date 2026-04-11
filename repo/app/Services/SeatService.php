@@ -15,6 +15,7 @@ use App\Models\Trip;
 use App\Models\TripSignup;
 use App\Models\User;
 use App\Services\AuditService;
+use App\Services\IdempotencyStore;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
@@ -123,9 +124,18 @@ class SeatService
 
     /**
      * Confirm a hold — links a payment and transitions status to CONFIRMED.
+     *
+     * An optional $idempotencyKey lets callers (e.g. the SignupWizard component
+     * and the API controller) safely retry on network failure without double-
+     * confirming and double-counting booking_count.
      */
-    public function confirmSeat(TripSignup $signup, string $paymentId): TripSignup
+    public function confirmSeat(TripSignup $signup, string $paymentId, ?string $idempotencyKey = null): TripSignup
     {
+        $store = new IdempotencyStore();
+        if ($idempotencyKey && $store->alreadyProcessed($idempotencyKey, 'seat.confirm', $signup->id)) {
+            return $signup->fresh();
+        }
+
         if ($signup->status !== SignupStatus::HOLD) {
             throw new RuntimeException('Only HOLD signups can be confirmed.', 422);
         }
@@ -134,7 +144,7 @@ class SeatService
             throw new RuntimeException('Hold has expired. Please restart the booking.', 422);
         }
 
-        return DB::transaction(function () use ($signup, $paymentId) {
+        return DB::transaction(function () use ($signup, $paymentId, $idempotencyKey, $store) {
             $before = ['status' => $signup->status->value];
 
             $signup->status       = SignupStatus::CONFIRMED;
@@ -158,6 +168,10 @@ class SeatService
                 'payment_id' => $paymentId,
             ]);
 
+            if ($idempotencyKey) {
+                $store->record($idempotencyKey, 'seat.confirm', 'TripSignup', $signup->id);
+            }
+
             SignupConfirmed::dispatch($trip, $signup->fresh());
 
             return $signup->fresh();
@@ -167,10 +181,20 @@ class SeatService
     /**
      * Release a seat — restores available_seats, marks hold as released,
      * and triggers waitlist offer if applicable.
+     *
+     * An optional $idempotencyKey prevents double-release when the expiry
+     * job fires twice (e.g., cron safety-net fires after the queue job
+     * already ran). Without it, a second call would incorrectly decrement
+     * available_seats a second time.
      */
-    public function releaseSeat(TripSignup $signup, HoldReleaseReason $reason): void
+    public function releaseSeat(TripSignup $signup, HoldReleaseReason $reason, ?string $idempotencyKey = null): void
     {
-        DB::transaction(function () use ($signup, $reason) {
+        $store = new IdempotencyStore();
+        if ($idempotencyKey && $store->alreadyProcessed($idempotencyKey, 'seat.release', $signup->id)) {
+            return;
+        }
+
+        DB::transaction(function () use ($signup, $reason, $idempotencyKey, $store) {
             $trip = Trip::lockForUpdate()->findOrFail($signup->trip_id);
 
             $before = ['status' => $signup->status->value];
@@ -207,6 +231,10 @@ class SeatService
                 'reason' => $reason->value,
             ]);
 
+            if ($idempotencyKey) {
+                $store->record($idempotencyKey, 'seat.release', 'TripSignup', $signup->id);
+            }
+
             SeatReleased::dispatch($trip->fresh());
 
             // Offer to next in waitlist
@@ -216,14 +244,22 @@ class SeatService
 
     /**
      * Cancel a confirmed signup — decrements booking_count and releases the seat.
+     *
+     * An optional $idempotencyKey guards against double-cancel (e.g., a payment
+     * void and a manual cancellation racing on the same signup).
      */
-    public function cancelConfirmedSignup(TripSignup $signup): void
+    public function cancelConfirmedSignup(TripSignup $signup, ?string $idempotencyKey = null): void
     {
+        $store = new IdempotencyStore();
+        if ($idempotencyKey && $store->alreadyProcessed($idempotencyKey, 'seat.cancel_confirmed', $signup->id)) {
+            return;
+        }
+
         if ($signup->status !== SignupStatus::CONFIRMED) {
             throw new RuntimeException('Only CONFIRMED signups can be cancelled.', 422);
         }
 
-        DB::transaction(function () use ($signup) {
+        DB::transaction(function () use ($signup, $idempotencyKey, $store) {
             $trip = Trip::lockForUpdate()->findOrFail($signup->trip_id);
 
             $before = ['status' => $signup->status->value];
@@ -244,6 +280,10 @@ class SeatService
             AuditService::record('trip_signup.cancelled', 'TripSignup', $signup->id, $before, [
                 'status' => SignupStatus::CANCELLED->value,
             ]);
+
+            if ($idempotencyKey) {
+                $store->record($idempotencyKey, 'seat.cancel_confirmed', 'TripSignup', $signup->id);
+            }
 
             SeatReleased::dispatch($trip->fresh());
             $this->waitlistService->offerNextSeat($trip->fresh());

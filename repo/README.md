@@ -69,7 +69,7 @@ app/
   Enums/          PHP 8.1 backed enums for every domain entity
   Events/         Broadcast events (SeatHeld, TripStatusChanged, …)
   Exceptions/     Custom exceptions (InvalidStatusTransition, StaleRecord)
-  Http/Middleware/ AccountStatus, Idempotency, Admin
+  Http/Middleware/ AccountStatus, Credentialing, Finance, Admin, VerifyApiCsrfToken
   Livewire/       Livewire 3 components grouped by module
   Models/         Eloquent models (one per file, UUID PKs)
   Services/       Business logic (TripService, SeatService, AuditService, …)
@@ -112,4 +112,5 @@ make test        # Run full test suite (unit + feature)
 make test-unit   # Unit tests only
 make test-feature# Feature tests only
 make coverage    # With HTML coverage report
+make docs-check  # Verify command names and middleware list match source
 ```

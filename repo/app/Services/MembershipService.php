@@ -10,6 +10,7 @@ use App\Models\MembershipOrder;
 use App\Models\MembershipPlan;
 use App\Models\Refund;
 use App\Models\User;
+use App\Services\IdempotencyStore;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
@@ -247,15 +248,22 @@ class MembershipService
 
     /**
      * Finance approves a pending refund. PENDING → APPROVED.
+     *
+     * `$idempotencyKey` is REQUIRED (FIN audit Issue 4).
      */
-    public function approveRefund(Refund $refund, User $approver): Refund
+    public function approveRefund(Refund $refund, User $approver, string $idempotencyKey): Refund
     {
+        $store = new IdempotencyStore();
+        if ($store->alreadyProcessed($idempotencyKey, 'refund.approve', $refund->id)) {
+            return $refund->fresh();
+        }
+
         if ($refund->status !== RefundStatus::PENDING) {
             throw new RuntimeException('Only PENDING refunds can be approved.', 422);
         }
 
-        return DB::transaction(function () use ($refund, $approver) {
-            $before         = ['status' => $refund->status->value];
+        return DB::transaction(function () use ($refund, $approver, $idempotencyKey, $store) {
+            $before              = ['status' => $refund->status->value];
             $refund->status      = RefundStatus::APPROVED;
             $refund->approved_by = $approver->id;
             $refund->saveWithLock();
@@ -265,6 +273,8 @@ class MembershipService
                 'approved_by' => $approver->id,
             ]);
 
+            $store->record($idempotencyKey, 'refund.approve', 'Refund', $refund->id);
+
             return $refund->fresh();
         });
     }
@@ -273,16 +283,23 @@ class MembershipService
      * Process an approved refund. APPROVED → PROCESSED.
      * Full refund  → order REFUNDED, expires_at = now (terminates membership).
      * Partial      → order PARTIALLY_REFUNDED, membership stays active.
+     *
+     * `$idempotencyKey` is REQUIRED (FIN audit Issue 4).
      */
-    public function processRefund(Refund $refund): Refund
+    public function processRefund(Refund $refund, string $idempotencyKey): Refund
     {
+        $store = new IdempotencyStore();
+        if ($store->alreadyProcessed($idempotencyKey, 'refund.process', $refund->id)) {
+            return $refund->fresh();
+        }
+
         if ($refund->status !== RefundStatus::APPROVED) {
             throw new RuntimeException('Only APPROVED refunds can be processed.', 422);
         }
 
-        return DB::transaction(function () use ($refund) {
-            $before              = ['status' => $refund->status->value];
-            $refund->status      = RefundStatus::PROCESSED;
+        return DB::transaction(function () use ($refund, $idempotencyKey, $store) {
+            $before               = ['status' => $refund->status->value];
+            $refund->status       = RefundStatus::PROCESSED;
             $refund->processed_at = now();
             $refund->saveWithLock();
 
@@ -313,6 +330,8 @@ class MembershipService
                 'status'       => RefundStatus::PROCESSED->value,
                 'processed_at' => now()->toIso8601String(),
             ]);
+
+            $store->record($idempotencyKey, 'refund.process', 'Refund', $refund->id);
 
             return $refund->fresh();
         });

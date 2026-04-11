@@ -20,6 +20,7 @@ class Trip extends Model
         'start_date', 'end_date', 'difficulty_level', 'prerequisites',
         'total_seats', 'available_seats', 'price_cents', 'status',
         'booking_count', 'average_rating', 'created_by', 'version',
+        'idempotency_key',
     ];
 
     protected function casts(): array

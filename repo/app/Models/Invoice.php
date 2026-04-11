@@ -23,6 +23,7 @@ class Invoice extends Model
         'due_date',
         'notes',
         'version',
+        'idempotency_key',
     ];
 
     protected function casts(): array

@@ -23,6 +23,7 @@ class CredentialingCase extends Model
         'submitted_at',
         'resolved_at',
         'version',
+        'idempotency_key',
     ];
 
     protected $casts = [

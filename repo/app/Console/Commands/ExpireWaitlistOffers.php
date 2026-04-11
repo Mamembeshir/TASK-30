@@ -21,7 +21,10 @@ class ExpireWaitlistOffers extends Command
         $count = 0;
         foreach ($expired as $entry) {
             try {
-                $waitlistService->expireOffer($entry);
+                // Deterministic key shared with ExpireWaitlistOfferJob so the
+                // cron safety-net and the queue job collapse onto one
+                // recorded expiry even if they both fire for the same entry.
+                $waitlistService->expireOffer($entry, 'waitlist.expire.' . $entry->id);
                 $count++;
             } catch (\Throwable $e) {
                 $this->error("Failed to expire waitlist entry {$entry->id}: {$e->getMessage()}");

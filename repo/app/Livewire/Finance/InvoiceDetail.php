@@ -23,7 +23,10 @@ class InvoiceDetail extends Component
     public function markPaid(InvoiceService $service): void
     {
         try {
-            $this->invoice = $service->markPaid($this->invoice);
+            $this->invoice = $service->markPaid(
+                $this->invoice,
+                'invoice.mark_paid.' . $this->invoice->id,
+            );
             $this->dispatch('notify', type: 'success', message: 'Invoice marked as paid.');
         } catch (\RuntimeException $e) {
             $this->addError('paid', $e->getMessage());
@@ -33,7 +36,10 @@ class InvoiceDetail extends Component
     public function void(InvoiceService $service): void
     {
         try {
-            $this->invoice = $service->voidInvoice($this->invoice);
+            $this->invoice = $service->voidInvoice(
+                $this->invoice,
+                'invoice.void.' . $this->invoice->id,
+            );
             $this->showVoidConfirm = false;
             $this->dispatch('notify', type: 'success', message: 'Invoice voided.');
         } catch (\RuntimeException $e) {

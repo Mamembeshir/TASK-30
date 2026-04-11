@@ -41,7 +41,9 @@ class FinanceDashboard extends Component
     {
         $payment = Payment::findOrFail($paymentId);
         try {
-            $service->voidPayment($payment);
+            // Deterministic per-payment key: a double-click collapses to the
+            // already-voided row instead of 422'ing on the second submit.
+            $service->voidPayment($payment, 'payment.void.' . $payment->id);
             $this->dispatch('notify', type: 'success', message: 'Payment voided.');
         } catch (\RuntimeException $e) {
             $this->dispatch('notify', type: 'error', message: $e->getMessage());
@@ -52,7 +54,7 @@ class FinanceDashboard extends Component
     {
         $date = $this->settlementDate ?: now()->toDateString();
         try {
-            $service->closeDailySettlement($date);
+            $service->closeDailySettlement($date, 'settlement.close.' . $date);
             $this->dispatch('notify', type: 'success', message: 'Settlement closed.');
         } catch (\RuntimeException $e) {
             $this->addError('settlement', $e->getMessage());

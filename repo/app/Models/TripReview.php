@@ -20,6 +20,7 @@ class TripReview extends Model
         'review_text',
         'status',
         'version',
+        'idempotency_key',
     ];
 
     protected function casts(): array

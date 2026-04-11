@@ -10,6 +10,7 @@ use App\Models\Trip;
 use App\Models\User;
 use App\Services\TripService;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Str;
 use Livewire\Attributes\Layout;
 use Livewire\Component;
 
@@ -35,6 +36,13 @@ class TripManage extends Component
     public int    $priceCents       = 0;
 
     public bool $showForm = false;
+
+    /**
+     * Per-component idempotency key for trip creation. Initialized once per
+     * component instance and reused across retries so that a double-click on
+     * "Save" in the create form collapses onto a single `trips` row.
+     */
+    public ?string $createIdempotencyKey = null;
 
     public function mount(?Trip $trip = null): void
     {
@@ -96,7 +104,8 @@ class TripManage extends Component
                 $this->trip = $tripService->update($this->trip, $payload);
                 $this->dispatch('notify', type: 'success', message: 'Trip updated.');
             } else {
-                $this->trip = $tripService->create($payload, Auth::user());
+                $this->createIdempotencyKey ??= (string) Str::uuid();
+                $this->trip = $tripService->create($payload, Auth::user(), $this->createIdempotencyKey);
                 $this->dispatch('notify', type: 'success', message: 'Trip created.');
                 $this->redirectRoute('admin.trips.manage', ['trip' => $this->trip]);
             }

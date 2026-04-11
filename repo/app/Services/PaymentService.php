@@ -9,6 +9,7 @@ use App\Models\MembershipOrder;
 use App\Models\Payment;
 use App\Models\TripSignup;
 use App\Models\User;
+use App\Services\IdempotencyStore;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
@@ -118,9 +119,21 @@ class PaymentService
     /**
      * Void a payment. Cascades to cancel linked trip signup or membership order.
      * questions.md 4.5: RECORDED or CONFIRMED → VOIDED.
+     *
+     * The $idempotencyKey is REQUIRED (FIN audit Issue 4): every mutating
+     * state transition on the universal service-layer contract takes a
+     * caller-stable key, so a double-click / retry / cascade-loop collapses
+     * onto the already-processed row instead of degrading into a 422 on a
+     * second attempt. Pass a deterministic per-entity key from Livewire
+     * (`payment.void.{paymentId}`) or a UUID from tests.
      */
-    public function voidPayment(Payment $payment): Payment
+    public function voidPayment(Payment $payment, string $idempotencyKey): Payment
     {
+        $store = new IdempotencyStore();
+        if ($store->alreadyProcessed($idempotencyKey, 'payment.void', $payment->id)) {
+            return $payment->fresh();
+        }
+
         if (! in_array($payment->status, [PaymentStatus::RECORDED, PaymentStatus::CONFIRMED], true)) {
             throw new RuntimeException(
                 "Cannot void a payment in {$payment->status->value} status.",
@@ -128,7 +141,7 @@ class PaymentService
             );
         }
 
-        return DB::transaction(function () use ($payment) {
+        return DB::transaction(function () use ($payment, $idempotencyKey, $store) {
             $before = $payment->toArray();
 
             $payment->status = PaymentStatus::VOIDED;
@@ -158,6 +171,8 @@ class PaymentService
             AuditService::record('payment.voided', 'Payment', $payment->id, $before, [
                 'status' => PaymentStatus::VOIDED->value,
             ]);
+
+            $store->record($idempotencyKey, 'payment.void', 'Payment', $payment->id);
 
             return $payment;
         });
