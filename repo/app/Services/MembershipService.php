@@ -190,8 +190,13 @@ class MembershipService
         string          $reason,
         ?int            $amountCents = null,
         string          $idempotencyKey = '',
+        ?string         $actorId = null,
     ): Refund {
-        if ($idempotencyKey && $existing = Refund::where('idempotency_key', $idempotencyKey)->first()) {
+        if ($actorId !== null && (string) $order->user_id !== $actorId) {
+            throw new RuntimeException('You are not authorised to refund this order.', 403);
+        }
+
+        if ($existing = Refund::where('idempotency_key', $idempotencyKey)->first()) {
             return $existing;
         }
 
@@ -227,7 +232,7 @@ class MembershipService
                 'refund_type'     => $type->value,
                 'reason'          => $reason,
                 'status'          => RefundStatus::PENDING->value,
-                'idempotency_key' => $idempotencyKey ?: (string) \Illuminate\Support\Str::uuid(),
+                'idempotency_key' => $idempotencyKey,
             ]);
 
             AuditService::record('refund.requested', 'Refund', $refund->id, null, [

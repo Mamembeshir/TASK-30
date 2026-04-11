@@ -8,7 +8,11 @@
 
 * **Question:** The prompt says holds expire after 10 minutes of inactivity. But what counts as "inactivity"? If the user is actively filling out payment fields, is that inactive?
 * **My Understanding:** "Inactivity" means the hold has not been confirmed (payment linked). The 10-minute timer is absolute from hold creation, not reset by page activity. This is simpler, more predictable, and prevents gaming.
-* **Solution:** Hold expires at exactly `created_at + 10 minutes` regardless of user activity. The UI shows a countdown timer. If the timer expires before payment confirmation, the hold releases and the user must restart. The UI warns at 2 minutes remaining.
+* **Solution:** Hold expires at exactly `created_at + 10 minutes` regardless of user activity. The UI shows a countdown timer. If the timer expires before payment confirmation, the hold releases and the user must restart. The UI warns at 2 minutes remaining — that warning is **pushed over Laravel Reverb** (`HoldExpiring` event on the user's private channel), not polled.
+* **Real-time mechanics (no polling):** When `SeatService::holdSeat()` creates the hold, it dispatches two delayed queue jobs with an explicit `->delay()`:
+  1. `App\Jobs\NotifyHoldExpiring` — fires at `hold_expires_at − 2 min` and broadcasts `HoldExpiring` on `user.{id}` so the SignupWizard's Echo listener can surface the warning toast without any page reload.
+  2. `App\Jobs\ReleaseExpiredHold` — fires at `hold_expires_at` and calls `SeatService::releaseSeat(..., HoldReleaseReason::EXPIRED)`, which in turn broadcasts `SeatReleased` on `trip.{id}` so every other viewer sees the seat re-appear instantly.
+  Both jobs are idempotent: they re-fetch the signup on execution and no-op if it was already confirmed, cancelled, or expired through another path. The previous `medvoyage:expire-seat-holds` cron is kept at a 10-minute cadence purely as a safety net for queue-outage recovery (so a dropped worker can't strand a hold forever) and is never the primary expiry path.
 
 ### 1.2 Can a user hold seats on multiple trips simultaneously?
 
@@ -26,7 +30,8 @@
 
 * **Question:** The prompt says waitlist is shown when capacity is reached and holds expire. But the exact mechanics of offering a seat to the next person aren't detailed.
 * **My Understanding:** When a seat becomes available (hold expired, signup cancelled), the system should automatically offer it to the first WAITING entry.
-* **Solution:** Seat release triggers `WaitlistService::offerNextSeat(trip)`. This finds the first WAITING entry by position, sets status → OFFERED, offer_expires_at = now + 10 min. The user sees an "accept" button on their dashboard. If they accept: creates a new TripSignup(HOLD) with a 10-min hold. If they don't accept in 10 min: entry → EXPIRED, next entry offered. This is checked by the ExpireWaitlistOffers job every 2 min AND lazily on trip page load.
+* **Solution:** Seat release triggers `WaitlistService::offerNextSeat(trip)`. This finds the first WAITING entry by position, sets status → OFFERED, offer_expires_at = now + 10 min, and broadcasts `WaitlistOfferMade` over Reverb on the recipient's private `user.{id}` channel so the "accept" banner appears in real time — no page refresh. If they accept: creates a new `TripSignup(HOLD)` with a 10-min hold (which itself wires up the real-time hold-expiry jobs from §1.1). If they don't accept in 10 min: entry → EXPIRED, next entry offered.
+* **Real-time expiry (no polling):** At the same time the offer is created, `offerNextSeat()` dispatches an `App\Jobs\ExpireWaitlistOfferJob` with `->delay($offer_expires_at)`. The job re-fetches the entry, verifies it is still `OFFERED`, and calls `WaitlistService::expireOffer()` which itself chains to the next waiting user. The legacy `medvoyage:expire-waitlist-offers` command has been demoted from every-minute polling to a 10-minute safety-net sweep in case the queue worker was down when the delayed job was scheduled.
 
 ### 1.5 Is the seat count eventually consistent or strictly consistent?
 
@@ -195,3 +200,13 @@ Config file `config/recommendations.php` lists active strategies in display orde
 * **Question:** The prompt describes many finance operations but doesn't describe the dashboard experience.
 * **My Understanding:** Finance staff need a clear daily workflow view.
 * **Solution:** Finance dashboard has tabs: (1) **Today's Payments** — table of all payments recorded today, with status badges, confirm/void buttons. (2) **Pending Refunds** — refund requests awaiting approval. (3) **Settlement** — current day's running totals (payments, refunds, net), with a "Close Day" button at end of day (or auto-closes at 23:59). (4) **Exceptions** — open settlement exceptions needing resolution. (5) **Invoices** — draft and issued invoices. Each tab shows a count badge in the tab header.
+
+---
+
+## 9. Architecture
+
+### 9.1 The prompt says "REST-style endpoints consumed by Livewire" — where are the REST endpoints?
+
+* **Question:** `metadata.json` asks for *"Laravel to expose REST-style endpoints consumed by Livewire components."* But `docs/api-spec.md` says "There is no separate REST API," and `routes/api.php` does not exist — every mutation is a Livewire action. Is the delivery meeting the spec or working around it?
+* **My Understanding:** The prompt's "REST-style endpoints" language predates a stack decision. In Laravel 11 + Livewire 3 the equivalent is the `POST /livewire/update` wire-protocol endpoint: every `wire:click` and `wire:model` action is a JSON-over-HTTP call through Laravel's normal middleware stack. Treating "REST-style" as a requirement to hand-author a second `/api/*` namespace on top of that would duplicate the auth, validation, and test surface with no second consumer to justify it (the system is offline / local — no mobile app, no SPA, no third-party integration).
+* **Solution:** **Livewire is the intentional substitute for a hand-authored REST API.** The decision is explicit, not accidental. The guarantees reviewers care about — idempotency keys, optimistic locking, role gates, audit chain, encryption/masking — are all enforced at the **service layer** (`App\Services\*`), which is transport-agnostic. Adding a second transport would only create a second place for those invariants to regress (exactly the failure modes found in Issues 2, 6, and 7 of the audit). The complete route + action + parameter reference lives in `docs/api-spec.md` and is the canonical API document. A reviewer who wants to exercise an "endpoint" programmatically hits `POST /livewire/update` with the snapshot + method name payload — every Livewire feature test in the suite does exactly this via `Livewire::test(...)->call(...)`. If a future integrator needs a machine-to-machine surface, the intended path is a thin `App\Http\Controllers\Api\*` namespace that delegates straight into the existing services; it is not in scope for this build and no such controllers exist today. Full rationale lives in `repo/docs/design.md §"REST-style endpoints — reconciling the prompt with Livewire 3"`.

@@ -14,9 +14,15 @@ class TopUpFlow extends Component
     public bool $confirmed = false;
     public string $error   = '';
 
+    /**
+     * Caller-stable idempotency key — see PurchaseFlow for rationale.
+     */
+    public string $idempotencyKey = '';
+
     public function mount(MembershipPlan $plan): void
     {
         $this->plan = $plan;
+        $this->idempotencyKey = (string) Str::uuid();
     }
 
     public function confirm(): void
@@ -26,10 +32,8 @@ class TopUpFlow extends Component
 
     public function submit(MembershipService $service)
     {
-        $key = (string) Str::uuid();
-
         try {
-            $service->topUp(auth()->user(), $this->plan, $key);
+            $service->topUp(auth()->user(), $this->plan, $this->idempotencyKey);
         } catch (RuntimeException $e) {
             $this->error = $e->getMessage();
             return;

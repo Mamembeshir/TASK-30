@@ -33,15 +33,24 @@ it('assigns sequential positions', function () {
         ->and($e2->position)->toBe(2);
 });
 
-it('rejects duplicate waitlist entry for same user and trip', function () {
+it('is idempotent: re-joining returns the existing entry instead of creating a second one', function () {
+    // joinWaitlist was changed from throw-on-duplicate to return-existing so
+    // that double-clicks and retries are safe under the universal service-layer
+    // idempotency contract. The test pins that behavior: the second call must
+    // return the *same* entry row (same id, same position) and must not create
+    // a second database row for the same (trip, user) pair.
     $trip = Trip::factory()->full()->create();
     $user = User::factory()->create();
     $svc  = app(WaitlistService::class);
 
-    $svc->joinWaitlist($trip, $user);
+    $first  = $svc->joinWaitlist($trip, $user);
+    $second = $svc->joinWaitlist($trip, $user);
 
-    expect(fn () => $svc->joinWaitlist($trip, $user))
-        ->toThrow(RuntimeException::class, 'already on the waitlist');
+    expect($second->id)->toBe($first->id)
+        ->and($second->position)->toBe($first->position);
+
+    expect(\App\Models\TripWaitlistEntry::where('trip_id', $trip->id)
+        ->where('user_id', $user->id)->count())->toBe(1);
 });
 
 it('offers seat to first WAITING entry', function () {

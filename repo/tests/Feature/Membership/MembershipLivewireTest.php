@@ -203,6 +203,23 @@ it('validates reason length on refund request', function () {
         ->assertHasErrors(['reason']);
 });
 
+it('forbids loading RefundRequest for another user\'s order', function () {
+    $owner = User::factory()->create(['status' => UserStatus::ACTIVE]);
+    $other = User::factory()->create(['status' => UserStatus::ACTIVE]);
+    $plan    = MembershipPlan::factory()->basic()->create();
+    $payment = Payment::factory()->for($owner)->create(['amount_cents' => 4900]);
+    $order   = MembershipOrder::factory()->paid()->for($owner)->for($plan, 'plan')->create([
+        'payment_id'   => $payment->id,
+        'amount_cents' => 4900,
+    ]);
+
+    // A different authenticated user must not be allowed to mount the
+    // refund form for an order they do not own (ownership gate in mount()).
+    Livewire::actingAs($other)
+        ->test(RefundRequest::class, ['order' => $order])
+        ->assertForbidden();
+});
+
 // ── RefundApproval ────────────────────────────────────────────────────────────
 
 it('renders refund approval for finance specialist', function () {

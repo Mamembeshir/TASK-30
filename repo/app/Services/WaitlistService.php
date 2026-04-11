@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Enums\SignupStatus;
 use App\Enums\WaitlistStatus;
 use App\Events\WaitlistOfferMade;
+use App\Jobs\ExpireWaitlistOfferJob;
 use App\Models\Trip;
 use App\Models\TripWaitlistEntry;
 use App\Models\User;
@@ -20,13 +21,15 @@ class WaitlistService
      */
     public function joinWaitlist(Trip $trip, User $user): TripWaitlistEntry
     {
+        // Idempotency: if the user already has an active entry, return it so that
+        // duplicate submissions (double-clicks, retries) are safe and don't throw.
         $existing = TripWaitlistEntry::where('trip_id', $trip->id)
             ->where('user_id', $user->id)
             ->whereIn('status', [WaitlistStatus::WAITING->value, WaitlistStatus::OFFERED->value])
-            ->exists();
+            ->first();
 
         if ($existing) {
-            throw new RuntimeException('You are already on the waitlist for this trip.', 422);
+            return $existing;
         }
 
         $position = TripWaitlistEntry::where('trip_id', $trip->id)
@@ -80,6 +83,14 @@ class WaitlistService
         ]);
 
         WaitlistOfferMade::dispatch($trip, $entry);
+
+        // Real-time expiry: schedule the 10-minute offer window as a delayed
+        // queue job instead of relying on the every-minute polling command.
+        // See docs/questions.md §1.4. Dispatched directly (not via
+        // afterCommit) so RefreshDatabase-wrapped tests still see the
+        // dispatch; the job re-fetches the entry on execution and no-ops if
+        // the enclosing transaction rolled back in production.
+        ExpireWaitlistOfferJob::dispatch($entry->id)->delay($offerExpiresAt);
     }
 
     /**

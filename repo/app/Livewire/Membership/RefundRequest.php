@@ -5,7 +5,6 @@ namespace App\Livewire\Membership;
 use App\Enums\RefundType;
 use App\Models\MembershipOrder;
 use App\Services\MembershipService;
-use Illuminate\Support\Str;
 use Livewire\Component;
 use RuntimeException;
 
@@ -28,6 +27,8 @@ class RefundRequest extends Component
 
     public function mount(MembershipOrder $order): void
     {
+        abort_if((string) $order->user_id !== (string) auth()->id(), 403);
+
         $this->order = $order;
     }
 
@@ -35,14 +36,21 @@ class RefundRequest extends Component
     {
         $this->validate();
 
+        // Re-check ownership in case the component state was tampered with.
+        abort_if((string) $this->order->user_id !== (string) auth()->id(), 403);
+
         $type         = RefundType::from($this->refundType);
         $amountCents  = $this->refundType === 'PARTIAL'
             ? (int) round((float) $this->amountInput * 100)
             : null;
-        $key = (string) Str::uuid();
+
+        // Deterministic key: same user + order always maps to the same string so
+        // that re-submits (double-clicks, back-button repost) collapse onto the
+        // existing Refund row via MembershipService::requestRefund's dedupe.
+        $key = 'refund-order-' . $this->order->id . '-' . auth()->id();
 
         try {
-            $service->requestRefund($this->order, $type, $this->reason, $amountCents, $key);
+            $service->requestRefund($this->order, $type, $this->reason, $amountCents, $key, auth()->id());
         } catch (RuntimeException $e) {
             $this->error = $e->getMessage();
             return;

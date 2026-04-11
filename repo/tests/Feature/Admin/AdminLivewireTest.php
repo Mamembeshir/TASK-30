@@ -42,6 +42,107 @@ it('AuditLogViewer route is forbidden for non-admin', function () {
         ->assertForbidden();
 });
 
+/**
+ * Helper: pull the paginated `logs` collection out of a Livewire test instance.
+ * The component renders both the table and the action/entity filter dropdowns
+ * from the same page, so HTML scraping (assertSee/assertDontSee) is unreliable
+ * for filter assertions — we assert against the underlying view data instead.
+ */
+function auditLogActions($component): array
+{
+    $logs = $component->viewData('logs');
+    return collect($logs->items())->pluck('action')->all();
+}
+
+it('AuditLogViewer filters by actor (email/username/uuid)', function () {
+    $admin  = adminUser();
+    $member = memberOnly();
+
+    \App\Models\AuditLog::record($admin->id,  'action.admin',  'X', null);
+    \App\Models\AuditLog::record($member->id, 'action.member', 'X', null);
+
+    $page = Livewire::actingAs($admin)->test(AuditLogViewer::class);
+
+    $page->set('actorFilter', $member->email);
+    expect(auditLogActions($page))->toBe(['action.member']);
+
+    $page->set('actorFilter', $member->username);
+    expect(auditLogActions($page))->toBe(['action.member']);
+
+    $page->set('actorFilter', $member->id);
+    expect(auditLogActions($page))->toBe(['action.member']);
+
+    $page->set('actorFilter', 'no-such-user@example.com');
+    expect(auditLogActions($page))->toBe([]);
+});
+
+it('AuditLogViewer filters by date range', function () {
+    $admin = adminUser();
+
+    $old = \App\Models\AuditLog::record($admin->id, 'action.old',    'X', null);
+    \App\Models\AuditLog::record($admin->id,        'action.recent', 'X', null);
+
+    // Backdate one entry without violating the append-only model rule
+    // (model::updating throws), so go directly through the query builder.
+    \App\Models\AuditLog::query()->where('id', $old->id)
+        ->update(['created_at' => now()->subDays(10)]);
+
+    $page = Livewire::actingAs($admin)
+        ->test(AuditLogViewer::class)
+        ->set('dateFromFilter', now()->subDays(1)->toDateString())
+        ->set('dateToFilter',   now()->toDateString());
+
+    expect(auditLogActions($page))->toContain('action.recent')
+        ->and(auditLogActions($page))->not->toContain('action.old');
+});
+
+it('AuditLogViewer filters by correlation id', function () {
+    $admin = adminUser();
+    $cid   = (string) \Illuminate\Support\Str::uuid();
+
+    \App\Models\AuditLog::record($admin->id, 'action.matched',   'X', null, null, null, null, null, $cid);
+    \App\Models\AuditLog::record($admin->id, 'action.unrelated', 'X', null);
+
+    $page = Livewire::actingAs($admin)
+        ->test(AuditLogViewer::class)
+        ->set('correlationIdFilter', $cid);
+
+    expect(auditLogActions($page))->toBe(['action.matched']);
+});
+
+it('AuditLogViewer filters by entity type', function () {
+    $admin = adminUser();
+
+    \App\Models\AuditLog::record($admin->id, 'action.trip',    'Trip',    null);
+    \App\Models\AuditLog::record($admin->id, 'action.payment', 'Payment', null);
+
+    $page = Livewire::actingAs($admin)
+        ->test(AuditLogViewer::class)
+        ->set('entityFilter', 'Trip');
+
+    expect(auditLogActions($page))->toBe(['action.trip']);
+});
+
+it('AuditLogViewer clearFilters resets every investigation filter', function () {
+    Livewire::actingAs(adminUser())
+        ->test(AuditLogViewer::class)
+        ->set('search',              'foo')
+        ->set('actionFilter',        'user.login')
+        ->set('entityFilter',        'User')
+        ->set('actorFilter',         'someone@example.com')
+        ->set('dateFromFilter',      '2026-01-01')
+        ->set('dateToFilter',        '2026-04-01')
+        ->set('correlationIdFilter', 'abc-123')
+        ->call('clearFilters')
+        ->assertSet('search',              '')
+        ->assertSet('actionFilter',        '')
+        ->assertSet('entityFilter',        '')
+        ->assertSet('actorFilter',         '')
+        ->assertSet('dateFromFilter',      '')
+        ->assertSet('dateToFilter',        '')
+        ->assertSet('correlationIdFilter', '');
+});
+
 // ── SystemConfig ───────────────────────────────────────────────────────────────
 
 it('SystemConfig renders for admin', function () {

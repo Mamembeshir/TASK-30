@@ -11,7 +11,6 @@ use App\Models\TripWaitlistEntry;
 use App\Services\SeatService;
 use App\Services\WaitlistService;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Str;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\On;
 use Livewire\Component;
@@ -25,9 +24,36 @@ class TripDetail extends Component
     public ?TripSignup $mySignup = null;
     public ?TripWaitlistEntry $myWaitlistEntry = null;
 
+    /**
+     * Stable idempotency key for holdSeat — set once in mount() so that
+     * double-clicks and Livewire re-renders all submit the same key, letting
+     * SeatService::holdSeat() deduplicate on it rather than creating a second
+     * hold or throwing a "already have a signup" error on retry.
+     */
+    public string $holdIdempotencyKey = '';
+
     public function mount(Trip $trip): void
     {
+        // Visibility: TripList only surfaces PUBLISHED/FULL trips, but the
+        // route-model-bound URL accepts any UUID. Without this guard, an
+        // authenticated user could fetch DRAFT, CLOSED, or CANCELLED trips
+        // by guessing/scraping IDs. Admins retain full visibility for ops.
+        $visibleStatuses = [TripStatus::PUBLISHED, TripStatus::FULL];
+
+        if (! in_array($trip->status, $visibleStatuses, true) && ! Auth::user()?->isAdmin()) {
+            // 404 (not 403) so the response does not confirm the existence
+            // of a hidden trip with this ID.
+            abort(404);
+        }
+
         $this->trip = $trip;
+
+        if (Auth::check()) {
+            // Deterministic key: same user + trip always produces the same string,
+            // so retries collapse onto the existing hold instead of generating a new one.
+            $this->holdIdempotencyKey = 'hold-' . Auth::id() . '-' . $trip->id;
+        }
+
         $this->loadUserState();
     }
 
@@ -63,8 +89,7 @@ class TripDetail extends Component
         }
 
         try {
-            $idempotencyKey = Str::uuid()->toString();
-            $signup         = $seatService->holdSeat($this->trip, Auth::user(), $idempotencyKey);
+            $signup = $seatService->holdSeat($this->trip, Auth::user(), $this->holdIdempotencyKey);
             $this->mySignup = $signup;
             $this->trip     = $this->trip->fresh();
 
@@ -97,7 +122,9 @@ class TripDetail extends Component
         }
 
         try {
-            $idempotencyKey = Str::uuid()->toString();
+            // Key is derived from the entry ID so re-clicks / retries reuse the
+            // same hold rather than trying (and failing) to create a second one.
+            $idempotencyKey = 'waitlist-accept-' . $this->myWaitlistEntry->id;
             $signup         = $waitlistService->acceptOffer($this->myWaitlistEntry, $idempotencyKey);
             $this->mySignup = $signup;
             $this->loadUserState();

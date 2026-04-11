@@ -129,3 +129,51 @@ it('voids linked membership order on void', function () {
 
     expect($order->fresh()->status)->toBe(OrderStatus::VOIDED);
 });
+
+// ── Optimistic locking on MembershipOrder cascades ───────────────────────────
+//
+// Regression for the "inconsistent optimistic-lock usage" audit finding:
+// both PENDING→PAID (confirmPayment) and →VOIDED (voidPayment) used to call
+// a naked $order->save() that bypassed HasOptimisticLocking, silently
+// clobbering a concurrent write on the same order. These tests pin the
+// version-bump behaviour so the fix can't regress.
+
+it('confirmPayment increments MembershipOrder.version when transitioning PENDING→PAID', function () {
+    $user    = User::factory()->create();
+    $payment = Payment::factory()->recorded()->for($user)->create();
+    $plan    = MembershipPlan::factory()->basic()->create();
+    $order   = MembershipOrder::factory()->for($user)->for($plan, 'plan')->create([
+        'payment_id' => $payment->id,
+        'status'     => OrderStatus::PENDING->value,
+        'version'    => 1,
+    ]);
+
+    app(PaymentService::class)->confirmPayment($payment, 'evt-version-1');
+
+    expect($order->fresh()->version)->toBe(2)
+        ->and($order->fresh()->status)->toBe(OrderStatus::PAID);
+});
+
+it('voidPayment increments MembershipOrder.version on cascaded VOID', function () {
+    $user    = User::factory()->create();
+    $payment = Payment::factory()->recorded()->for($user)->create();
+    $plan    = MembershipPlan::factory()->basic()->create();
+    $order   = MembershipOrder::factory()->for($user)->for($plan, 'plan')->create([
+        'payment_id' => $payment->id,
+        'status'     => OrderStatus::PENDING->value,
+        'version'    => 3,
+    ]);
+
+    app(PaymentService::class)->voidPayment($payment);
+
+    expect($order->fresh()->version)->toBe(4)
+        ->and($order->fresh()->status)->toBe(OrderStatus::VOIDED);
+});
+
+// Note on the stale-version regression: a true end-to-end race test would
+// require two processes fetching the order at the same version and both
+// trying to save. That can't be easily simulated here because confirmPayment
+// re-fetches the order *inside* its transaction. The version-bump assertions
+// above are sufficient proof that saveWithLock() is being used — a plain
+// save() would leave version at 1 since HasOptimisticLocking's boot hook
+// is intentionally a no-op (callers must opt in via saveWithLock()).

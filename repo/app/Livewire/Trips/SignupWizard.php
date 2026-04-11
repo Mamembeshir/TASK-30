@@ -3,8 +3,10 @@
 namespace App\Livewire\Trips;
 
 use App\Enums\SignupStatus;
+use App\Enums\TenderType;
 use App\Models\Trip;
 use App\Models\TripSignup;
+use App\Services\PaymentService;
 use App\Services\SeatService;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\Layout;
@@ -38,6 +40,15 @@ class SignupWizard extends Component
     // Hold countdown (seconds remaining)
     public int $holdSecondsRemaining = 0;
 
+    /**
+     * Caller-stable idempotency key for the payment recorded in this wizard.
+     *
+     * Derived from the signup id so duplicate submits (double-clicks, retries
+     * after a transient error, accidental form re-posts) collapse onto the
+     * same Payment row via PaymentService::recordPayment's dedupe.
+     */
+    public string $paymentIdempotencyKey = '';
+
     public function mount(Trip $trip, TripSignup $signup): void
     {
         // Verify this signup belongs to the current user and is a HOLD
@@ -45,9 +56,18 @@ class SignupWizard extends Component
             abort(403);
         }
 
+        // Enforce object-level consistency: the signup must belong to the route trip.
+        // Without this check a user could load the wizard with their own HOLD signup
+        // but a different trip URL, allowing the payment amount (derived below from the
+        // signup's trip) to diverge from the seat actually being held.
+        if ($signup->trip_id !== $trip->id) {
+            abort(403);
+        }
+
         $this->trip   = $trip;
         $this->signup = $signup;
         $this->holdSecondsRemaining = max(0, (int) now()->diffInSeconds($signup->hold_expires_at, false));
+        $this->paymentIdempotencyKey = 'pay-signup-' . $signup->id;
     }
 
     #[On('echo-private:user.{signup.user_id},HoldExpiring')]
@@ -69,7 +89,7 @@ class SignupWizard extends Component
         $this->step = max(1, $this->step - 1);
     }
 
-    public function submitPayment(SeatService $seatService): void
+    public function submitPayment(SeatService $seatService, PaymentService $paymentService): void
     {
         $this->validate([
             'tenderType' => 'required|in:CASH,CHECK,CARD_ON_FILE',
@@ -80,12 +100,19 @@ class SignupWizard extends Component
             return;
         }
 
-        // In a real system this would create a Payment record via PaymentService.
-        // For now we use a placeholder payment ID.
-        $paymentId = 'PAY-' . strtoupper(substr(md5($this->signup->id . now()->timestamp), 0, 8));
-
         try {
-            $this->signup = $seatService->confirmSeat($this->signup, $paymentId);
+            // Record (not yet confirmed) payment via PaymentService — Finance
+            // confirms it separately. Idempotent on $paymentIdempotencyKey, so
+            // duplicate submissions return the existing Payment row.
+            $payment = $paymentService->recordPayment(
+                Auth::user(),
+                TenderType::from($this->tenderType),
+                (int) $this->signup->trip->price_cents,
+                $this->referenceNumber !== '' ? $this->referenceNumber : null,
+                $this->paymentIdempotencyKey,
+            );
+
+            $this->signup = $seatService->confirmSeat($this->signup, $payment->id);
             $this->step   = 4; // confirmation screen
         } catch (\RuntimeException $e) {
             $this->addError('payment', $e->getMessage());

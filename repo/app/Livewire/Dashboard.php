@@ -50,7 +50,11 @@ class Dashboard extends Component
             ],
         ];
 
+        // Recent activity exposes actor identities and the global action stream,
+        // so non-admins are limited to entries they themselves performed.
+        $viewer = auth()->user();
         $recentActivity = AuditLog::with('actor.profile')
+            ->when(! $viewer?->isAdmin(), fn ($q) => $q->where('actor_id', $viewer?->id))
             ->latest('created_at')
             ->limit(8)
             ->get();

@@ -70,7 +70,6 @@ class SeedDemo extends Command
         DB::table('audit_logs')->delete();
         DB::table('user_roles')->delete();
         DB::table('user_profiles')->delete();
-        DB::table('idempotency_records')->delete();
         DB::table('users')->delete();
 
         DB::statement('SET session_replication_role = DEFAULT');

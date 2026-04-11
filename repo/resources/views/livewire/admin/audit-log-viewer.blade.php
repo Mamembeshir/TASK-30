@@ -32,6 +32,31 @@
             />
         </div>
 
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+            <x-input
+                label="Actor"
+                type="text"
+                wire:model.live.debounce.300ms="actorFilter"
+                placeholder="UUID, email, or username"
+            />
+            <x-input
+                label="From"
+                type="date"
+                wire:model.live="dateFromFilter"
+            />
+            <x-input
+                label="To"
+                type="date"
+                wire:model.live="dateToFilter"
+            />
+            <x-input
+                label="Correlation ID"
+                type="text"
+                wire:model.live.debounce.300ms="correlationIdFilter"
+                placeholder="Trace a single request"
+            />
+        </div>
+
         <x-table :headers="[
             'when'   => 'When',
             'actor'  => 'Actor',

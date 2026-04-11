@@ -153,3 +153,41 @@ it('blocks access to dashboard when account becomes suspended mid-session', func
          ->get(route('dashboard'))
          ->assertRedirect(route('login'));
 });
+
+// ── Session fixation hardening (AUTH-03) ──────────────────────────────────────
+
+it('regenerates session ID on successful login to prevent session fixation', function () {
+    $user = User::factory()->create([
+        'password' => bcrypt('Password1!abc'),
+        'status'   => UserStatus::ACTIVE,
+    ]);
+
+    // Capture the session ID that exists before authentication.
+    $sessionIdBefore = session()->getId();
+
+    Livewire::test(\App\Livewire\Auth\Login::class)
+        ->set('identifier', $user->email)
+        ->set('password', 'Password1!abc')
+        ->call('login');
+
+    // Session::regenerate() must have run — the ID must differ.
+    expect(session()->getId())->not->toBe($sessionIdBefore);
+});
+
+it('does not regenerate session ID on a failed login attempt', function () {
+    $user = User::factory()->create([
+        'password' => bcrypt('Password1!abc'),
+        'status'   => UserStatus::ACTIVE,
+    ]);
+
+    $sessionIdBefore = session()->getId();
+
+    Livewire::test(\App\Livewire\Auth\Login::class)
+        ->set('identifier', $user->email)
+        ->set('password', 'wrong-password')
+        ->call('login')
+        ->assertHasErrors('identifier');
+
+    // Session ID must be unchanged — regeneration only happens on success.
+    expect(session()->getId())->toBe($sessionIdBefore);
+});

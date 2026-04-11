@@ -95,11 +95,15 @@ class PaymentService
                 'confirmation_event_id' => $confirmationEventId,
             ]);
 
-            // Wire-up: PENDING membership order → PAID
+            // Wire-up: PENDING membership order → PAID.
+            // saveWithLock() (not plain save()) so the PENDING→PAID transition
+            // honors MembershipOrder's row-version guard. A concurrent void or
+            // refund on the same order will surface as StaleRecordException
+            // rather than silently clobbering a terminal state.
             $order = MembershipOrder::where('payment_id', $payment->id)->first();
             if ($order && $order->status->value === 'PENDING') {
                 $order->status = \App\Enums\OrderStatus::PAID;
-                $order->save();
+                $order->saveWithLock();
                 AuditService::record('membership_order.paid', 'MembershipOrder', $order->id, null, [
                     'payment_id' => $payment->id,
                 ]);
@@ -141,11 +145,14 @@ class PaymentService
                 }
             }
 
-            // Cascade: cancel linked membership order
+            // Cascade: cancel linked membership order.
+            // saveWithLock() so a race with a concurrent refund / top-up /
+            // PENDING→PAID transition on the same order surfaces as a
+            // StaleRecordException instead of silently overwriting.
             $order = MembershipOrder::where('payment_id', $payment->id)->first();
             if ($order && ! in_array($order->status, [\App\Enums\OrderStatus::REFUNDED, \App\Enums\OrderStatus::VOIDED], true)) {
                 $order->status = \App\Enums\OrderStatus::VOIDED;
-                $order->save();
+                $order->saveWithLock();
             }
 
             AuditService::record('payment.voided', 'Payment', $payment->id, $before, [

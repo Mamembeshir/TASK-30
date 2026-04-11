@@ -86,6 +86,19 @@ echo "[7/7] Starting services..."
 php artisan reverb:start --host=0.0.0.0 --port=8080 --no-interaction &
 echo "      Reverb WebSocket running on port 8080 (PID $!)."
 
+# Queue worker — picks up delayed jobs used for real-time seat-hold and
+# waitlist-offer expiry (see App\Jobs\*). Without this the delayed jobs
+# would pile up in the `jobs` table and never fire. --sleep=1 keeps the
+# expiry latency under a second; --tries=3 gives transient DB blips a
+# chance to recover before a job is marked failed.
+php artisan queue:work --sleep=1 --tries=3 --queue=default &
+echo "      Queue worker running (PID $!)."
+
+# Scheduler — runs the 10-minute safety-net sweeps for stranded holds/offers
+# (the real-time delayed jobs handle the primary path).
+php artisan schedule:work &
+echo "      Scheduler running (PID $!)."
+
 echo ""
 echo "  App URL:    http://localhost:8000"
 echo "  Reverb WS:  ws://localhost:8080"

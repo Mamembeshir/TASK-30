@@ -21,9 +21,18 @@ class PaymentRecord extends Component
     /** @var array<int, array{id: string, label: string}> */
     public array $userResults = [];
 
+    /**
+     * Caller-stable idempotency key for this PaymentRecord form instance.
+     * Generated once at mount and reused across submit retries so duplicate
+     * submissions collapse onto a single Payment row via PaymentService::recordPayment.
+     * After a successful submit the form redirects, so a fresh visit gets a new key.
+     */
+    public string $idempotencyKey = '';
+
     public function mount(): void
     {
         Gate::allowIf(auth()->user()->hasRole(UserRole::FINANCE_SPECIALIST) || auth()->user()->isAdmin());
+        $this->idempotencyKey = (string) Str::uuid();
     }
 
     public function searchUsers(): void
@@ -69,7 +78,7 @@ class PaymentRecord extends Component
                 TenderType::from($this->tenderType),
                 $amountCents,
                 $this->referenceNumber ?: null,
-                (string) Str::uuid()
+                $this->idempotencyKey,
             );
 
             return redirect()->route('finance.payments.show', $payment)

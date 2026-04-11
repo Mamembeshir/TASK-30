@@ -60,6 +60,37 @@ it('shows join waitlist button when trip is FULL', function () {
         ->assertSee('Join Waitlist');
 });
 
+// Trips not in PUBLISHED/FULL status must not be discoverable by members — a
+// guessed or scraped UUID for a DRAFT/CLOSED/CANCELLED trip must return 404
+// (not 403) so that the response does not confirm the trip's existence.
+
+it('returns 404 when a member accesses a DRAFT trip by direct URL', function () {
+    $user = User::factory()->create(['status' => UserStatus::ACTIVE]);
+    $trip = Trip::factory()->create(['status' => TripStatus::DRAFT->value]);
+
+    Livewire::actingAs($user)
+        ->test(TripDetail::class, ['trip' => $trip])
+        ->assertNotFound();
+});
+
+it('returns 404 when a member accesses a CANCELLED trip by direct URL', function () {
+    $user = User::factory()->create(['status' => UserStatus::ACTIVE]);
+    $trip = Trip::factory()->create(['status' => TripStatus::CANCELLED->value]);
+
+    Livewire::actingAs($user)
+        ->test(TripDetail::class, ['trip' => $trip])
+        ->assertNotFound();
+});
+
+it('returns 404 when a member accesses a CLOSED trip by direct URL', function () {
+    $user = User::factory()->create(['status' => UserStatus::ACTIVE]);
+    $trip = Trip::factory()->create(['status' => TripStatus::CLOSED->value]);
+
+    Livewire::actingAs($user)
+        ->test(TripDetail::class, ['trip' => $trip])
+        ->assertNotFound();
+});
+
 it('creates a seat hold via holdSeat action', function () {
     $user = User::factory()->create(['status' => UserStatus::ACTIVE]);
     $trip = Trip::factory()->published()->withSeats(5, 5)->create();

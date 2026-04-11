@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Services\AuditService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Session;
 use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\Layout;
 use Livewire\Component;
@@ -106,13 +107,19 @@ class Login extends Component
 
         Auth::login($user, $this->remember);
 
+        // Session-fixation hardening: rotate the session ID on successful auth.
+        // The Livewire AJAX response carries the new session cookie in its Set-Cookie
+        // headers, which the browser commits before our window.location redirect fires.
+        // (This is the same pattern Laravel Breeze's Livewire stack uses.)
+        //
+        // Use the Session facade rather than `request()->session()` so this also
+        // works in Livewire test contexts, where the underlying Request may not
+        // have a session store bound by middleware.
+        Session::regenerate();
+
         AuditService::record('user.login', 'User', $user->id, null, ['email' => $user->email]);
 
         // Full redirect without navigate:true — crosses layout boundary (guest → app).
-        // session()->regenerate() is intentionally omitted here: in a Livewire AJAX context
-        // the new session cookie is sent in the JSON response; if the browser hasn't stored
-        // it before window.location.href fires the /dashboard request fails auth.
-        // Session fixation is mitigated by password verification above.
         $this->redirect(route('dashboard'));
     }
 

@@ -129,3 +129,26 @@ it('SignupWizard is forbidden for a different user', function () {
         ->test(SignupWizard::class, ['trip' => $trip, 'signup' => $signup])
         ->assertForbidden();
 });
+
+it('SignupWizard is forbidden when signup trip_id does not match the route trip', function () {
+    // Regression guard for the trip/signup mismatch blocker: a user who owns a
+    // valid HOLD on tripA must not be able to load the wizard with tripB in the
+    // URL. Without the trip_id check the payment amount would be derived from
+    // the wrong trip's price.
+    $doctor = approvedDoctor();
+    $tripA  = Trip::factory()->published()->create(['lead_doctor_id' => $doctor->id]);
+    $tripB  = Trip::factory()->published()->create(['lead_doctor_id' => $doctor->id]);
+    $user   = User::factory()->create(['status' => UserStatus::ACTIVE]);
+    UserProfile::create(['user_id' => $user->id, 'first_name' => 'Test', 'last_name' => 'User']);
+
+    $signup = TripSignup::factory()->for($tripA)->for($user->fresh())->create([
+        'status'          => SignupStatus::HOLD->value,
+        'hold_expires_at' => now()->addMinutes(10),
+        'version'         => 1,
+    ]);
+
+    // Signup belongs to tripA; route param is tripB → must be 403.
+    Livewire::actingAs($user->fresh())
+        ->test(SignupWizard::class, ['trip' => $tripB, 'signup' => $signup])
+        ->assertForbidden();
+});

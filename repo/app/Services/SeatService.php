@@ -8,6 +8,8 @@ use App\Enums\TripStatus;
 use App\Events\SeatHeld;
 use App\Events\SeatReleased;
 use App\Events\SignupConfirmed;
+use App\Jobs\NotifyHoldExpiring;
+use App\Jobs\ReleaseExpiredHold;
 use App\Models\SeatHold;
 use App\Models\Trip;
 use App\Models\TripSignup;
@@ -30,6 +32,14 @@ class SeatService
      */
     public function holdSeat(Trip $trip, User $user, string $idempotencyKey): TripSignup
     {
+        // Idempotency: if a signup was already created for this key, return it
+        // immediately without entering the transaction. This makes double-clicks,
+        // Livewire re-renders, and network retries collapse onto the same hold.
+        $existing = TripSignup::where('idempotency_key', $idempotencyKey)->first();
+        if ($existing) {
+            return $existing;
+        }
+
         return DB::transaction(function () use ($trip, $user, $idempotencyKey) {
             // Lock the trip row for the duration of this transaction
             $trip = Trip::lockForUpdate()->findOrFail($trip->id);
@@ -87,6 +97,25 @@ class SeatService
             ]);
 
             SeatHeld::dispatch($trip->fresh());
+
+            // Real-time expiry: schedule the broadcast warning (T-2min) and the
+            // hard release (T=expiry) as delayed queue jobs. These replace the
+            // old `medvoyage:expire-seat-holds` polling loop with precise,
+            // event-driven scheduling — see docs/questions.md §1.1. The cron
+            // command still runs on a slower cadence as a safety net in case
+            // the queue worker is down.
+            //
+            // Dispatched *inside* the transaction rather than via afterCommit
+            // because test runs wrap each case in an outer RefreshDatabase
+            // transaction that never commits — afterCommit would silently
+            // drop the dispatch and mask real bugs. If this transaction rolls
+            // back in production, both jobs re-fetch the signup by id on
+            // execution and no-op when it doesn't exist.
+            $warnAt = $expiresAt->copy()->subMinutes(2);
+            if ($warnAt->isFuture()) {
+                NotifyHoldExpiring::dispatch($signup->id)->delay($warnAt);
+            }
+            ReleaseExpiredHold::dispatch($signup->id)->delay($expiresAt);
 
             return $signup;
         });

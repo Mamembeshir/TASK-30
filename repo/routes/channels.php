@@ -13,5 +13,5 @@ use Illuminate\Support\Facades\Broadcast;
 */
 
 Broadcast::channel('user.{userId}', function ($user, $userId) {
-    return (int) $user->id === (int) $userId;
+    return (string) $user->id === (string) $userId;
 });

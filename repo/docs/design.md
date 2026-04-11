@@ -52,21 +52,75 @@ Browser
                            └─ success: redirect / emit event
 ```
 
-### No Separate REST API
+### "REST-style endpoints" — reconciling the prompt with Livewire 3
 
-All mutations happen through **Livewire actions** (server-to-server AJAX). There are no standalone API endpoints; the Livewire wire-protocol is the only mutation channel.
+The project prompt (see `metadata.json`) calls for *"Laravel to expose
+REST-style endpoints consumed by Livewire components"*. In modern Laravel
+11 + Livewire 3 this is **already what we do**, just not as hand-authored
+per-resource routes. Every `wire:click` action flows through a single
+HTTP endpoint (`POST /livewire/update`) that accepts a JSON payload of
+`{component, snapshot, calls: [{method, params}]}` and returns a JSON
+patch. Under the hood:
+
+- Transport is HTTP + JSON.
+- Every call passes through the normal Laravel middleware stack
+  (`auth`, `account.status`, CSRF, throttle). There is no bypass.
+- Validation uses the standard `Livewire\Validate` / `$rules` pipeline
+  and surfaces as 422 with the same shape a FormRequest would emit.
+- Idempotency keys (`idempotency_key` column + `MembershipService` /
+  `PaymentService` dedupe) are enforced at the **service layer**, so
+  every mutation path — HTTP or queue worker — passes through the
+  same guard.
+- Optimistic locking (`saveWithLock()` → `StaleRecordException` → 409)
+  is also at the service layer for the same reason.
+- The complete list of component routes, actions, parameters, auth
+  gates, success redirects, and error codes lives in
+  `docs/api-spec.md` and is treated as the canonical API reference.
+
+**We deliberately do not publish a second, parallel `/api/*` namespace.**
+Doing so would duplicate the auth stack, validation layer, and test
+surface with no second consumer to justify it (the system is offline /
+local — there is no mobile app, no SPA, no third-party integration).
+Every historical vulnerability class we care about — refund ownership
+checks (Issue 2), trip-visibility oracles (Issue 7), idempotency misses
+(Issue 6) — would then have two places to regress instead of one. The
+service-layer guarantees are transport-agnostic; a second transport adds
+risk without reducing it.
+
+If a future integrator needs a machine-to-machine surface, the intended
+path is a thin `App\Http\Controllers\Api\*` namespace that **delegates
+directly to the same services** the Livewire components call. That
+preserves the "one guard, one rule book" property. It is not in scope
+for this build and no such controllers exist today.
+
+All mutations happen through **Livewire actions** (the
+`POST /livewire/update` wire-protocol endpoint). There are no standalone
+REST routes.
 
 ### Scheduled Commands
 
-Five artisan commands run on a cron inside the container:
+Five artisan commands run on a cron inside the container. Daily jobs are
+pinned to the facility timezone (`config('app.facility_timezone')`, default
+`America/New_York`) so the 23:59 settlement cutoff is honored regardless of
+the server's `APP_TIMEZONE` (UTC in production).
 
-| Command | Frequency |
-|---|---|
-| `medvoyage:expire-seat-holds` | Every minute |
-| `medvoyage:expire-waitlist-offers` | Every minute |
-| `medvoyage:check-license-expiry` | Daily |
-| `medvoyage:close-daily-settlement` | Daily 23:59 |
-| `medvoyage:reconcile-seats` | Every 5 minutes |
+| Command | Frequency | Role |
+|---|---|---|
+| `medvoyage:expire-seat-holds` | Every 10 minutes | Safety net only — real path is `App\Jobs\ReleaseExpiredHold` dispatched with `->delay($hold_expires_at)` from `SeatService::holdSeat()` |
+| `medvoyage:expire-waitlist-offers` | Every 10 minutes | Safety net only — real path is `App\Jobs\ExpireWaitlistOfferJob` dispatched with `->delay($offer_expires_at)` from `WaitlistService::offerNextSeat()` |
+| `medvoyage:reconcile-seats` | Every 5 minutes | Primary path (drift repair) |
+| `medvoyage:close-settlement` | Daily 23:59 (facility time) | Primary path |
+| `medvoyage:check-license-expiry` | Daily 01:00 (facility time) | Primary path |
+
+**Why the seat-hold / waitlist-offer commands are demoted:** hold and
+waitlist-offer expiry are driven by the **real-time WebSocket path** — see
+`docs/questions.md §1.1 / §1.4`. When a hold or offer is created, the
+service immediately queues a delayed job (`App\Jobs\ReleaseExpiredHold`,
+`App\Jobs\NotifyHoldExpiring`, `App\Jobs\ExpireWaitlistOfferJob`) at the
+exact expiry timestamp; the queue worker in the container picks them up
+the instant they come due. The cron sweeps exist only to recover records
+that were stranded if the queue worker was down at the moment the delayed
+job was scheduled. That is why the cadence is 10 minutes, not 1.
 
 ---
 
@@ -180,20 +234,28 @@ WaitlistService::joinWaitlist()
   ├─ create TripWaitlistEntry (position = MAX + 1, status=WAITING)
         │
         ▼ (when a hold expires or signup is cancelled)
-medvoyage:expire-seat-holds (every minute)
-  ├─ find expired HOLD signups
-  ├─ cancel signup, release SeatHold
-  ├─ increment available_seats
-  └─ WaitlistService::offerNext()
+App\Jobs\ReleaseExpiredHold (delayed job, fires at hold_expires_at)
+  ├─ re-fetch signup, no-op if already confirmed/cancelled
+  ├─ SeatService::releaseSeat(EXPIRED)
+  │    ├─ cancel signup, release SeatHold
+  │    ├─ increment available_seats
+  │    └─ broadcast SeatReleased on trip.{id} (Reverb)
+  └─ WaitlistService::offerNextSeat()
        ├─ find first WAITING entry for trip
        ├─ update entry: status=OFFERED, offer_expires_at = now + waitlist_offer_minutes
-       └─ (notify user — UI badge)
+       ├─ broadcast WaitlistOfferMade on user.{id} (Reverb) — real-time accept banner
+       └─ queue App\Jobs\ExpireWaitlistOfferJob delayed until offer_expires_at
         │
-        ▼ (user acts on offer)
+        ▼ (user acts on offer — real-time, no polling)
 TripDetail: holdSeat() — same as normal signup flow
   OR
-medvoyage:expire-waitlist-offers (every minute)
-  └─ entry → EXPIRED → offerNext() again
+App\Jobs\ExpireWaitlistOfferJob (delayed job, fires at offer_expires_at)
+  └─ entry → EXPIRED → offerNextSeat() again
+
+Both scheduled commands (medvoyage:expire-seat-holds, every 10 minutes;
+medvoyage:expire-waitlist-offers, every 10 minutes) are safety-net sweeps
+for stranded records after a queue-worker outage — they are not the
+primary expiry path.
 ```
 
 ### 3.3 Payment-to-Settlement Flow
@@ -411,7 +473,6 @@ SUBMITTED ──startReview()──► IN_REVIEW
 | `user_roles` | `user_id`, `role` | No timestamps; use `addRole()` / `removeRole()` |
 | `sessions` | `id`, `user_id`, `payload` | DB-backed sessions |
 | `audit_logs` | `id`, `actor_id`, `action`, `entity_type`, `entity_id`, `before_data`, `after_data`, `previous_hash` | Append-only; tamper-evident chain via `previous_hash` |
-| `idempotency_records` | `idempotency_key`, `endpoint` (unique together), `expires_at` | TTL-based; prevents duplicate mutations |
 
 ### Credentialing
 
@@ -503,9 +564,38 @@ SUBMITTED ──startReview()──► IN_REVIEW
 
 ### Idempotency
 
-- Mutation endpoints (holdSeat, recordPayment, purchase membership, etc.) accept a client-generated `idempotency_key`.
-- `IdempotencyRecord` stores the key + endpoint + response for `idempotency_ttl_hours` hours (default 24).
-- On replay: the stored response is returned without re-executing the action.
+**Service-layer is the sole enforcement path.** Every mutating service method
+(`SeatService::holdSeat`, `PaymentService::recordPayment`,
+`MembershipService::purchase` / `renew` / `topUp` / `requestRefund`, …)
+accepts a caller-supplied `idempotencyKey` and dedupes on it by looking up a
+`idempotency_key` column on the owning domain table:
+
+| Domain write | Backing column |
+|---|---|
+| Seat hold | `trip_signups.idempotency_key` |
+| Payment record | `payments.idempotency_key` |
+| Membership purchase / renew / top-up | `membership_orders.idempotency_key` |
+| Refund request | `refunds.idempotency_key` |
+
+Each column has a uniqueness guarantee, and every service checks for an
+existing row with the same key *before* starting its transaction — a retry
+returns the existing record instead of creating a duplicate or throwing.
+
+Callers (Livewire components) are required to pass a **deterministic** key
+derived from stable state (user id, order id, signup id, …). See e.g.
+`SignupWizard::$paymentIdempotencyKey`, `TripDetail::$holdIdempotencyKey`, and
+`RefundRequest::submit()`. Random UUIDs per click are a bug — they would give
+every retry a fresh key and defeat the dedupe.
+
+**No HTTP-layer middleware.** An earlier `IdempotencyMiddleware` inspected an
+`X-Idempotency-Key` header on POST/PUT/PATCH requests against a separate
+`idempotency_records` table, but in this Livewire-only app every mutation
+flows through `POST /livewire/update` (the wire-protocol endpoint) and that
+header is never sent. The middleware was never wired to any route and was
+removed along with its backing table and model in migration
+`2026_04_11_000002_drop_idempotency_records_table`. Service-layer dedupe is
+transport-agnostic and covers HTTP, queue workers, and console commands with
+a single enforcement surface.
 
 ### Optimistic Locking
 

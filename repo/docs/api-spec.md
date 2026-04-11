@@ -1,6 +1,37 @@
 # MedVoyage — API / Component Reference
 
-All interactions are via Livewire components (server-driven). There is no separate REST API. Components are mounted on HTTP GET routes; mutations happen through Livewire actions called from the browser.
+> **A note on the prompt's "REST-style endpoints" language.** The project
+> brief asks for *"Laravel to expose REST-style endpoints consumed by
+> Livewire components."* In Laravel 11 + Livewire 3 that is already what
+> we deliver — every action below is a JSON-over-HTTP call to the
+> `POST /livewire/update` wire-protocol endpoint, passing through the
+> normal `auth` / `account.status` / CSRF middleware stack and the same
+> service-layer guards (idempotency keys, optimistic locking, audit
+> chain, role gates) that a hand-authored `/api/*` route would use.
+>
+> We deliberately do not publish a second, parallel `/api/*` namespace:
+> it would duplicate the auth and validation surface with no second
+> consumer to justify it (the system is offline / local — no mobile app,
+> no SPA, no third-party integration), and every security-sensitive
+> invariant we care about is enforced at the service layer, not the
+> transport. See `docs/design.md §"REST-style endpoints — reconciling
+> the prompt with Livewire 3"` for the full rationale. **This document
+> is the canonical API reference for reviewers and integrators.** Each
+> entry below lists the route (HTTP GET mounts the component), the
+> callable actions (the "endpoints" in REST terms), parameters, success
+> outcomes, and error codes.
+
+Every row renders as follows:
+
+- **Route** — the URL a browser hits to load the component. This is the
+  GET endpoint; it has no side effects.
+- **Actions** — the Livewire methods that are invokable via
+  `POST /livewire/update`. These are the mutation endpoints.
+- **Auth** — middleware + in-component role/ownership gate.
+- **Parameters** — fields sent in the wire-protocol payload.
+- **Success / Errors** — the same HTTP status codes a REST API would
+  return, surfaced via exception → handler mapping (see
+  "Error Conventions" at the bottom).
 
 ---
 
@@ -34,7 +65,11 @@ All interactions are via Livewire components (server-driven). There is no separa
 | | |
 |---|---|
 | Auth | Authenticated |
-| Renders | User profile page (read-only display) |
+| Actions | `save(EncryptionService)` |
+| Parameters | `firstName: string (required, max 100)`, `lastName: string (required, max 100)`, `dateOfBirth: date\|null (past)`, `phone: string\|null (max 20)`, `address: string\|null (max 300)`, `ssnFragment: string\|null (exactly 4 digits)` |
+| Success | Profile updated; `saved` flag set to true; sensitive fields wiped from component state |
+| Errors | 422 – validation failure |
+| Notes | Sensitive fields (`address`, `ssnFragment`) are encrypted at rest and shown only as masks in the read-only display block. Submitting a blank value for either field leaves the existing encrypted value untouched. Admins viewing their own profile see plaintext; all other roles see the mask. |
 
 ---
 
