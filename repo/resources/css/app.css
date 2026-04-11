@@ -1,0 +1,175 @@
+/* ── Self-hosted Fonts ────────────────────────────────────────────────────── */
+
+/* DM Sans — Display / Headings */
+@font-face {
+    font-family: 'DM Sans';
+    src: url('/fonts/dm-sans/DMSans-Regular.woff2') format('woff2');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'DM Sans';
+    src: url('/fonts/dm-sans/DMSans-Medium.woff2') format('woff2');
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'DM Sans';
+    src: url('/fonts/dm-sans/DMSans-SemiBold.woff2') format('woff2');
+    font-weight: 600;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'DM Sans';
+    src: url('/fonts/dm-sans/DMSans-Bold.woff2') format('woff2');
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
+}
+
+/* IBM Plex Sans — Body */
+@font-face {
+    font-family: 'IBM Plex Sans';
+    src: url('/fonts/ibm-plex-sans/IBMPlexSans-Regular.woff2') format('woff2');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'IBM Plex Sans';
+    src: url('/fonts/ibm-plex-sans/IBMPlexSans-Medium.woff2') format('woff2');
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'IBM Plex Sans';
+    src: url('/fonts/ibm-plex-sans/IBMPlexSans-SemiBold.woff2') format('woff2');
+    font-weight: 600;
+    font-style: normal;
+    font-display: swap;
+}
+
+/* IBM Plex Mono — Codes, IDs, Amounts */
+@font-face {
+    font-family: 'IBM Plex Mono';
+    src: url('/fonts/ibm-plex-mono/IBMPlexMono-Regular.woff2') format('woff2');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+/* ── Design System CSS Variables ─────────────────────────────────────────── */
+
+:root {
+    /* Surface */
+    --surface-primary:   #FAFBFC;
+    --surface-secondary: #F1F4F8;
+    --surface-elevated:  #FFFFFF;
+    --surface-sunken:    #E8ECF1;
+
+    /* Brand */
+    --brand-primary:       #1B6B93;
+    --brand-primary-hover: #155A7D;
+    --brand-primary-light: #E8F4F8;
+    --brand-secondary:     #2D9596;
+
+    /* Semantic */
+    --success:       #0F766E;
+    --success-light: #ECFDF5;
+    --warning:       #B45309;
+    --warning-light: #FFFBEB;
+    --danger:        #B91C1C;
+    --danger-light:  #FEF2F2;
+    --info:          #1D4ED8;
+    --info-light:    #EFF6FF;
+
+    /* Text */
+    --text-primary:   #111827;
+    --text-secondary: #4B5563;
+    --text-tertiary:  #9CA3AF;
+    --text-inverse:   #FFFFFF;
+
+    /* Borders & Dividers */
+    --border-default: #E5E7EB;
+    --border-strong:  #D1D5DB;
+    --border-focus:   #1B6B93;
+
+    /* Shadows */
+    --shadow-sm:    0 1px 2px 0 rgba(0,0,0,0.05);
+    --shadow-md:    0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -2px rgba(0,0,0,0.05);
+    --shadow-lg:    0 10px 15px -3px rgba(0,0,0,0.08), 0 4px 6px -4px rgba(0,0,0,0.05);
+    --shadow-focus: 0 0 0 3px rgba(27,107,147,0.15);
+}
+
+/* ── Tailwind Base ────────────────────────────────────────────────────────── */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Base Overrides ──────────────────────────────────────────────────────── */
+
+@layer base {
+    html {
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+    }
+
+    body {
+        color: var(--text-primary);
+        background-color: var(--surface-primary);
+    }
+
+    h1, h2, h3, h4, h5, h6 {
+        font-family: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+    }
+
+    code, pre, .font-mono {
+        font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    }
+
+    /* Focus ring consistency */
+    :focus-visible {
+        outline: none;
+        box-shadow: var(--shadow-focus);
+    }
+}
+
+/* ── Component Utilities ─────────────────────────────────────────────────── */
+
+@layer components {
+    /* Table row hover */
+    .table-row-hover:hover {
+        background-color: var(--surface-secondary);
+    }
+
+    /* Card interactive */
+    .card-interactive {
+        transition: box-shadow 150ms ease, transform 150ms ease;
+    }
+    .card-interactive:hover {
+        box-shadow: var(--shadow-md);
+    }
+
+    /* Input focus ring */
+    .input-focus:focus {
+        border-color: var(--border-focus);
+        box-shadow: var(--shadow-focus);
+        outline: none;
+    }
+
+    /* Status progress bar */
+    .progress-bar {
+        height: 2px;
+        background-color: var(--brand-primary);
+        transition: width 300ms ease-out;
+    }
+}
+
+/* ── Alpine cloak ────────────────────────────────────────────────────────── */
+
+[x-cloak] { display: none !important; }

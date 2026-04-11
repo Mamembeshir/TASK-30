@@ -1,0 +1,76 @@
+services:
+
+  # ── Application ─────────────────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: medvoyage_app
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8000}:8000"
+      - "${REVERB_PORT:-8080}:8080"
+    environment:
+      APP_NAME: MedVoyage
+      APP_ENV: local
+      APP_DEBUG: "true"
+      APP_URL: "http://localhost:${APP_PORT:-8000}"
+      LOG_CHANNEL: stderr
+      DB_CONNECTION: pgsql
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_DATABASE: "${DB_DATABASE:-medvoyage}"
+      DB_USERNAME: "${DB_USERNAME:-medvoyage}"
+      DB_PASSWORD: "${DB_PASSWORD:-secret}"
+      QUEUE_CONNECTION: database
+      CACHE_STORE: database
+      SESSION_DRIVER: database
+      FILESYSTEM_DISK: local
+      BROADCAST_CONNECTION: reverb
+      REVERB_APP_ID: medvoyage
+      REVERB_APP_KEY: medvoyage-key
+      REVERB_APP_SECRET: medvoyage-secret
+      REVERB_HOST: "0.0.0.0"
+      REVERB_PORT: 8080
+      REVERB_SCHEME: http
+      VITE_REVERB_APP_KEY: medvoyage-key
+      VITE_REVERB_HOST: localhost
+      VITE_REVERB_PORT: 8080
+      VITE_REVERB_SCHEME: http
+    volumes:
+      - .:/var/www/html
+      - app_storage:/var/www/html/storage/app
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - medvoyage
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: medvoyage_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${DB_DATABASE:-medvoyage}"
+      POSTGRES_USER: "${DB_USERNAME:-medvoyage}"
+      POSTGRES_PASSWORD: "${DB_PASSWORD:-secret}"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-medvoyage} -d ${DB_DATABASE:-medvoyage}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - medvoyage
+
+networks:
+  medvoyage:
+    driver: bridge
+
+volumes:
+  db_data:
+  app_storage:
