@@ -27,7 +27,7 @@ it('logs in with valid credentials and creates a session', function () {
     ]);
 
     Livewire::test(\App\Livewire\Auth\Login::class)
-        ->set('login', $user->email)
+        ->set('identifier', $user->email)
         ->set('password', 'Password1!abc')
         ->call('login')
         ->assertRedirect(route('dashboard'));
@@ -43,7 +43,7 @@ it('resets failed_login_count on successful login', function () {
     ]);
 
     Livewire::test(\App\Livewire\Auth\Login::class)
-        ->set('login', $user->email)
+        ->set('identifier', $user->email)
         ->set('password', 'Password1!abc')
         ->call('login');
 
@@ -59,10 +59,10 @@ it('increments failed_login_count on wrong password', function () {
     ]);
 
     Livewire::test(\App\Livewire\Auth\Login::class)
-        ->set('login', $user->email)
+        ->set('identifier', $user->email)
         ->set('password', 'wrongpassword')
         ->call('login')
-        ->assertHasErrors('login');
+        ->assertHasErrors('identifier');
 
     expect($user->fresh()->failed_login_count)->toBe(1);
     $this->assertGuest();
@@ -79,7 +79,7 @@ it('locks account after 5 failed attempts', function () {
     $component = Livewire::test(\App\Livewire\Auth\Login::class);
 
     foreach (range(1, 5) as $i) {
-        $component->set('login', $user->email)
+        $component->set('identifier', $user->email)
                   ->set('password', 'wrongpassword')
                   ->call('login');
     }
@@ -97,10 +97,10 @@ it('returns locked error on 6th attempt and does not increment count', function 
     ]);
 
     Livewire::test(\App\Livewire\Auth\Login::class)
-        ->set('login', $user->email)
+        ->set('identifier', $user->email)
         ->set('password', 'wrongpassword')
         ->call('login')
-        ->assertHasErrors('login');
+        ->assertHasErrors('identifier');
 
     // Count must NOT have incremented (AUTH-02: count doesn't increment during lockout)
     expect($user->fresh()->failed_login_count)->toBe(5);
@@ -117,7 +117,7 @@ it('does not extend the lock timer during lockout period', function () {
     ]);
 
     Livewire::test(\App\Livewire\Auth\Login::class)
-        ->set('login', $user->email)
+        ->set('identifier', $user->email)
         ->set('password', 'wrongpassword')
         ->call('login');
 
@@ -135,10 +135,10 @@ it('rejects login while SUSPENDED', function () {
     ]);
 
     Livewire::test(\App\Livewire\Auth\Login::class)
-        ->set('login', $user->email)
+        ->set('identifier', $user->email)
         ->set('password', 'Password1!abc')
         ->call('login')
-        ->assertHasErrors('login');
+        ->assertHasErrors('identifier');
 
     $this->assertGuest();
 });

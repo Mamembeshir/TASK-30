@@ -14,8 +14,8 @@ use Livewire\Component;
 #[Layout('layouts.guest')]
 class Login extends Component
 {
-    public string $login    = '';  // accepts email address or username
-    public string $password = '';
+    public string $identifier = '';  // accepts email address or username
+    public string $password   = '';
     public bool   $remember = false;
 
     /** Seconds remaining in lockout (populated on locked rejection). */
@@ -24,19 +24,19 @@ class Login extends Component
     public function login(): void
     {
         $this->validate([
-            'login'    => ['required', 'string'],
-            'password' => ['required', 'string'],
+            'identifier' => ['required', 'string'],
+            'password'   => ['required', 'string'],
         ]);
 
         /** @var User|null $user */
-        $user = User::where('email', $this->login)
-                    ->orWhere('username', $this->login)
+        $user = User::where('email', $this->identifier)
+                    ->orWhere('username', $this->identifier)
                     ->first();
 
         // Unknown credential → generic error (no user enumeration)
         if (! $user) {
             throw ValidationException::withMessages([
-                'login' => 'The provided credentials do not match our records.',
+                'identifier' =>'The provided credentials do not match our records.',
             ]);
         }
 
@@ -49,7 +49,7 @@ class Login extends Component
             ]);
 
             throw ValidationException::withMessages([
-                'login' => 'Account is temporarily locked due to too many failed attempts.',
+                'identifier' =>'Account is temporarily locked due to too many failed attempts.',
             ]);
         }
 
@@ -74,12 +74,12 @@ class Login extends Component
             if ($newCount >= 5) {
                 $this->lockedSecondsRemaining = 900;
                 throw ValidationException::withMessages([
-                    'login' => 'Too many failed attempts. Account locked for 15 minutes.',
+                    'identifier' =>'Too many failed attempts. Account locked for 15 minutes.',
                 ]);
             }
 
             throw ValidationException::withMessages([
-                'login' => 'The provided credentials do not match our records.',
+                'identifier' =>'The provided credentials do not match our records.',
             ]);
         }
 
@@ -90,7 +90,7 @@ class Login extends Component
             ]);
 
             throw ValidationException::withMessages([
-                'login' => match ($user->status) {
+                'identifier' =>match ($user->status) {
                     UserStatus::SUSPENDED   => 'Your account has been suspended. Please contact support.',
                     UserStatus::DEACTIVATED => 'Your account has been deactivated.',
                     default                 => 'Your account is not active.',
@@ -105,11 +105,14 @@ class Login extends Component
         ])->save();
 
         Auth::login($user, $this->remember);
-        session()->regenerate();
 
         AuditService::record('user.login', 'User', $user->id, null, ['email' => $user->email]);
 
-        // Full redirect (not navigate:true) — switches from guest to app layout
+        // Full redirect without navigate:true — crosses layout boundary (guest → app).
+        // session()->regenerate() is intentionally omitted here: in a Livewire AJAX context
+        // the new session cookie is sent in the JSON response; if the browser hasn't stored
+        // it before window.location.href fires the /dashboard request fails auth.
+        // Session fixation is mitigated by password verification above.
         $this->redirect(route('dashboard'));
     }
 

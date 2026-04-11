@@ -32,8 +32,8 @@
         <x-input
             label="Email or username"
             type="text"
-            wire:model="login"
-            :error="$errors->first('login')"
+            wire:model="identifier"
+            :error="$errors->first('identifier')"
             required
             autocomplete="username"
             placeholder="you@example.com or your_username"

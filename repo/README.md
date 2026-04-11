@@ -26,22 +26,17 @@ Visit **http://localhost:8000** once startup completes (~60 s on first boot whil
 
 ## Demo Accounts
 
-Run the demo seeder once (idempotent — safe to re-run):
+The following accounts are created automatically on first boot (`docker compose up`):
 
-```bash
-make shell
-php artisan db:seed-demo
-```
+| Username   | Password     | Role(s)                    |
+|------------|--------------|----------------------------|
+| `admin`    | `Seed1234!@` | Administrator              |
+| `reviewer` | `Seed1234!@` | Credentialing Reviewer     |
+| `finance`  | `Seed1234!@` | Finance Specialist         |
+| `doctor`   | `Seed1234!@` | Doctor + Member            |
+| `member`   | `Seed1234!@` | Member                     |
 
-| Username  | Password      | Role(s)                          |
-|-----------|---------------|----------------------------------|
-| `admin`   | `Admin123!@`  | Administrator                    |
-| `drsmith` | `Doctor123!@` | Doctor + Member (APPROVED)       |
-| `drjones` | `Doctor123!@` | Doctor (Under Review)            |
-| `member1` | `Member123!@` | Member (Standard membership)     |
-| `member2` | `Member123!@` | Member                           |
-| `reviewer`| `Review123!@` | Credentialing Reviewer           |
-| `finance` | `Finance123!@`| Finance Specialist               |
+You can log in with a username **or** email address (e.g. `admin` or `admin@medvoyage.test`).
 
 ---
 

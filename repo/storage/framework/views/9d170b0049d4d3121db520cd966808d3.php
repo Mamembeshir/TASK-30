@@ -40,14 +40,14 @@
 
         <?php if (isset($component)) { $__componentOriginalc2fcfa88dc54fee60e0757a7e0572df1 = $component; } ?>
 <?php if (isset($attributes)) { $__attributesOriginalc2fcfa88dc54fee60e0757a7e0572df1 = $attributes; } ?>
-<?php $component = Illuminate\View\AnonymousComponent::resolve(['view' => 'components.input','data' => ['label' => 'Email or username','type' => 'text','wire:model' => 'login','error' => $errors->first('login'),'required' => true,'autocomplete' => 'username','placeholder' => 'you@example.com or your_username']] + (isset($attributes) && $attributes instanceof Illuminate\View\ComponentAttributeBag ? $attributes->all() : [])); ?>
+<?php $component = Illuminate\View\AnonymousComponent::resolve(['view' => 'components.input','data' => ['label' => 'Email or username','type' => 'text','wire:model' => 'identifier','error' => $errors->first('identifier'),'required' => true,'autocomplete' => 'username','placeholder' => 'you@example.com or your_username']] + (isset($attributes) && $attributes instanceof Illuminate\View\ComponentAttributeBag ? $attributes->all() : [])); ?>
 <?php $component->withName('input'); ?>
 <?php if ($component->shouldRender()): ?>
 <?php $__env->startComponent($component->resolveView(), $component->data()); ?>
 <?php if (isset($attributes) && $attributes instanceof Illuminate\View\ComponentAttributeBag): ?>
 <?php $attributes = $attributes->except(\Illuminate\View\AnonymousComponent::ignoredParameterNames()); ?>
 <?php endif; ?>
-<?php $component->withAttributes(['label' => 'Email or username','type' => 'text','wire:model' => 'login','error' => \Illuminate\View\Compilers\BladeCompiler::sanitizeComponentAttribute($errors->first('login')),'required' => true,'autocomplete' => 'username','placeholder' => 'you@example.com or your_username']); ?>
+<?php $component->withAttributes(['label' => 'Email or username','type' => 'text','wire:model' => 'identifier','error' => \Illuminate\View\Compilers\BladeCompiler::sanitizeComponentAttribute($errors->first('identifier')),'required' => true,'autocomplete' => 'username','placeholder' => 'you@example.com or your_username']); ?>
 <?php echo $__env->renderComponent(); ?>
 <?php endif; ?>
 <?php if (isset($__attributesOriginalc2fcfa88dc54fee60e0757a7e0572df1)): ?>

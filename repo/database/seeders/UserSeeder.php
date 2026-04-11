@@ -2,15 +2,19 @@
 
 namespace Database\Seeders;
 
+use App\Enums\CredentialingStatus;
 use App\Enums\UserRole;
 use App\Enums\UserStatus;
+use App\Models\Doctor;
 use App\Models\User;
 use App\Models\UserProfile;
 use Illuminate\Database\Seeder;
-use Illuminate\Support\Str;
 
 class UserSeeder extends Seeder
 {
+    /** Default password for all seeded accounts: Seed1234!@ */
+    private const DEFAULT_PASSWORD = 'Seed1234!@';
+
     private array $demoUsers = [
         [
             'username' => 'admin',
@@ -53,10 +57,9 @@ class UserSeeder extends Seeder
     {
         foreach ($this->demoUsers as $data) {
             $user = User::create([
-                'id'       => Str::uuid(),
                 'username' => $data['username'],
                 'email'    => $data['email'],
-                'password' => bcrypt('password'),
+                'password' => bcrypt(self::DEFAULT_PASSWORD),
                 'status'   => UserStatus::ACTIVE,
                 'version'  => 1,
             ]);
@@ -68,10 +71,20 @@ class UserSeeder extends Seeder
             ]);
 
             foreach ($data['roles'] as $role) {
-                \DB::table('user_roles')->insert([
-                    'user_id'     => $user->id,
-                    'role'        => $role->value,
-                    'assigned_at' => now(),
+                $user->addRole($role);
+            }
+
+            // Doctors need a Doctor profile row so /credentialing/profile works.
+            if (in_array(UserRole::DOCTOR, $data['roles'], true)) {
+                Doctor::create([
+                    'user_id'              => $user->id,
+                    'specialty'            => 'Internal Medicine',
+                    'npi_number'           => '1234567890',
+                    'license_state'        => 'CA',
+                    'license_expiry'       => now()->addYears(2)->toDateString(),
+                    'credentialing_status' => CredentialingStatus::APPROVED,
+                    'activated_at'         => now()->subDays(30),
+                    'version'              => 1,
                 ]);
             }
         }

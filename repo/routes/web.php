@@ -67,8 +67,12 @@ Route::middleware(['auth', 'account.status'])->group(function () {
         ]);
     })->name('credentialing.documents.download');
 
-    // Redirect old /credentialing routes
-    Route::get('/credentialing', fn () => redirect()->route('credentialing.profile'))->name('credentialing.index');
+    // Redirect old /credentialing routes — doctors go to their profile, everyone else to the case list.
+    Route::get('/credentialing', function () {
+        return auth()->user()->hasRole(\App\Enums\UserRole::DOCTOR)
+            ? redirect()->route('credentialing.profile')
+            : redirect()->route('credentialing.cases');
+    })->name('credentialing.index');
     Route::get('/credentialing/{case}', fn () => redirect()->route('credentialing.cases'))->name('credentialing.show');
 
     // Membership

@@ -44,7 +44,8 @@ unset($__defined_vars); ?>
             ['label' => 'My Orders',       'route' => 'membership.orders','icon' => 'receipt', 'roles' => [UserRole::MEMBER]],
         ],
         'Credentialing' => [
-            ['label' => 'Cases',           'route' => 'credentialing.index', 'icon' => 'clipboard', 'roles' => [UserRole::DOCTOR, UserRole::CREDENTIALING_REVIEWER, UserRole::ADMIN]],
+            ['label' => 'My Credentialing','route' => 'credentialing.profile', 'icon' => 'clipboard', 'roles' => [UserRole::DOCTOR]],
+            ['label' => 'Cases',           'route' => 'credentialing.cases',   'icon' => 'clipboard', 'roles' => [UserRole::CREDENTIALING_REVIEWER, UserRole::ADMIN]],
         ],
         'Finance' => [
             ['label' => 'Dashboard',       'route' => 'finance.index',       'icon' => 'dollar',    'roles' => [UserRole::FINANCE_SPECIALIST, UserRole::ADMIN]],
@@ -60,9 +61,12 @@ unset($__defined_vars); ?>
     ];
 ?>
 
-<aside
+<div
     x-data="{ open: false }"
     x-on:toggle-sidebar.window="open = !open"
+    x-on:keydown.escape.window="open = false"
+>
+<aside
     class="fixed inset-y-0 left-0 z-40 flex flex-col w-[260px] bg-white border-r border-[#E5E7EB] transition-transform duration-200
            lg:translate-x-0 lg:static lg:inset-auto"
     :class="open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'"
@@ -104,6 +108,7 @@ unset($__defined_vars); ?>
                             <li>
                                 <a
                                     href="<?php echo e(route($item['route'])); ?>"
+                                    x-on:click="open = false"
                                     class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors duration-100
                                            <?php echo e($isActive
                                                ? 'bg-[#E8F4F8] text-[#1B6B93]'
@@ -171,4 +176,5 @@ unset($__defined_vars); ?>
     x-transition:leave-start="opacity-100"
     x-transition:leave-end="opacity-0"
 ></div>
+</div>
 <?php /**PATH /var/www/html/resources/views/components/sidebar.blade.php ENDPATH**/ ?>
