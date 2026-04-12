@@ -8,27 +8,22 @@ set -e
 echo "MedVoyage Test Suite"
 echo "===================="
 
-# ── Always run inside the Docker app container ────────────────────────────────
-# Detect whether we are already inside the app container by checking a known
-# path written by the Dockerfile / entrypoint.  Everything outside (host,
-# CI runner, CodeBuild container) builds + starts the stack first.
-if [ "$(pwd)" != "/var/www/html" ] || [ ! -f vendor/autoload.php ]; then
-    # Ensure images are built and containers are up
-    docker compose build --quiet 2>/dev/null || docker-compose build --quiet
-    docker compose up -d --wait 2>/dev/null || docker-compose up -d
-
-    docker compose exec app bash run_tests.sh "$@" || docker-compose exec app bash run_tests.sh "$@"
+# ── Ensure tests run inside the Docker app container ─────────────────────────
+# If vendor/autoload.php exists at /var/www/html we are already inside the app
+# container. Otherwise we are on the host or a CI runner — build the images,
+# start the DB, and run a one-off app container for the test suite.
+if [ ! -f /var/www/html/vendor/autoload.php ]; then
+    docker compose build --quiet
+    docker compose up -d db            # start DB only; the run container talks to it
+    docker compose run --rm app bash run_tests.sh "$@"
     EXIT=$?
-
-    # Clean up temp artifacts that leak through the volume mount
-    rm -rf storage/framework/testing
-
+    rm -rf storage/framework/testing   # clean up volume-mount artifacts
     exit $EXIT
 fi
 
-# ── From here we are inside the Docker app container ──────────────────────────
+# ── From here we are inside the Docker app container ─────────────────────────
 
-# ── Generate .env.testing from .env.example if it does not exist ──────────────
+# ── Generate .env.testing from .env.example if it does not exist ─────────────
 if [ ! -f .env.testing ]; then
     if [ ! -f .env.example ]; then
         echo "ERROR: .env.example not found — cannot generate .env.testing"
@@ -36,11 +31,9 @@ if [ ! -f .env.testing ]; then
     fi
     echo "Generating .env.testing from .env.example …"
     cp .env.example .env.testing
-    # Override values that must differ for the test environment
-    sed -i 's/^APP_ENV=.*/APP_ENV=testing/'           .env.testing
+    sed -i 's/^APP_ENV=.*/APP_ENV=testing/'                .env.testing
     sed -i 's/^DB_DATABASE=.*/DB_DATABASE=medvoyage_test/' .env.testing
-    # Generate an APP_KEY if the example ships with an empty one (uses pure
-    # PHP so it works before artisan is available).
+    # Generate an APP_KEY if the example ships with an empty one
     if grep -q '^APP_KEY=$' .env.testing; then
         APP_KEY="base64:$(php -r 'echo base64_encode(random_bytes(32));')"
         sed -i "s|^APP_KEY=.*|APP_KEY=$APP_KEY|" .env.testing
@@ -71,10 +64,6 @@ done
 
 EXIT_CODE=0
 
-# Run unit + feature together as a single artisan invocation so PHPUnit
-# collects both suites in one pass.  Splitting into two separate
-# --testsuite flags does not reliably union suites in PHPUnit 10/11 —
-# the last flag silently wins, causing one suite to be skipped.
 if [ "$RUN_UNIT" = true ] && [ "$RUN_FEATURE" = true ]; then
     echo ""
     echo "--- Unit + Feature Tests ---"
