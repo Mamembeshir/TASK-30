@@ -85,6 +85,9 @@ if [ "$COVERAGE" = true ]; then
     php artisan test --coverage --min=80 || EXIT_CODE=1
 fi
 
+# ── Clean up temp artifacts left by Storage::fake() ──────────────────────────
+rm -rf storage/framework/testing
+
 echo ""
 if [ $EXIT_CODE -eq 0 ]; then
     echo "All tests passed."
