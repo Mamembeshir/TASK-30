@@ -25,9 +25,11 @@ if [ ! -f .env.testing ]; then
     # Override values that must differ for the test environment
     sed -i 's/^APP_ENV=.*/APP_ENV=testing/'           .env.testing
     sed -i 's/^DB_DATABASE=.*/DB_DATABASE=medvoyage_test/' .env.testing
-    # Generate an APP_KEY if the example ships with an empty one
+    # Generate an APP_KEY if the example ships with an empty one (uses pure
+    # PHP so it works before composer install / vendor is available).
     if grep -q '^APP_KEY=$' .env.testing; then
-        php artisan key:generate --env=testing --no-interaction --quiet
+        APP_KEY="base64:$(php -r 'echo base64_encode(random_bytes(32));')"
+        sed -i "s|^APP_KEY=.*|APP_KEY=$APP_KEY|" .env.testing
     fi
 fi
 
