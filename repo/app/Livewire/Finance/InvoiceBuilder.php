@@ -6,7 +6,7 @@ use App\Enums\LineItemType;
 use App\Enums\UserRole;
 use App\Models\Invoice;
 use App\Models\User;
-use App\Services\InvoiceService;
+use App\Services\ApiClient;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Str;
 use Livewire\Component;
@@ -65,18 +65,28 @@ class InvoiceBuilder extends Component
         }
     }
 
-    public function createInvoice(InvoiceService $service): void
+    public function createInvoice(): void
     {
         $this->validate(['selectedUserId' => 'required|uuid|exists:users,id']);
-        $user = User::findOrFail($this->selectedUserId);
 
         $this->createIdempotencyKey ??= (string) Str::uuid();
 
-        $this->invoice = $service->createInvoice($user, $this->createIdempotencyKey);
+        $response = app(ApiClient::class)->post('/invoices', [
+            'user_id'         => $this->selectedUserId,
+            'idempotency_key' => $this->createIdempotencyKey,
+        ]);
+
+        if ($response->status() >= 400) {
+            $this->addError('invoice', $response->json('message') ?? 'Failed to create invoice.');
+            return;
+        }
+
+        $data          = $response->json();
+        $this->invoice = Invoice::find($data['id']);
         $this->dispatch('notify', type: 'success', message: 'Invoice created.');
     }
 
-    public function addLine(InvoiceService $service): void
+    public function addLine(): void
     {
         $this->validate([
             'lineDescription' => 'required|string|max:500',
@@ -86,34 +96,39 @@ class InvoiceBuilder extends Component
 
         $amountCents = (int) round((float) $this->lineAmount * 100);
 
-        try {
-            $service->addLineItem(
-                $this->invoice,
-                $this->lineDescription,
-                $amountCents,
-                LineItemType::from($this->lineType)
-            );
-            $this->invoice = $this->invoice->fresh();
-            $this->lineDescription = '';
-            $this->lineAmount      = '';
-            $this->lineType        = '';
-        } catch (\RuntimeException $e) {
-            $this->addError('line', $e->getMessage());
+        $response = app(ApiClient::class)->post('/invoices/' . $this->invoice->id . '/lines', [
+            'description'  => $this->lineDescription,
+            'amount_cents' => $amountCents,
+            'line_type'    => $this->lineType,
+        ]);
+
+        if ($response->status() >= 400) {
+            $this->addError('line', $response->json('message') ?? 'Failed to add line item.');
+            return;
         }
+
+        $this->invoice         = $this->invoice->fresh();
+        $this->lineDescription = '';
+        $this->lineAmount      = '';
+        $this->lineType        = '';
     }
 
-    public function issue(InvoiceService $service)
+    public function issue()
     {
-        try {
-            $this->invoice = $service->issueInvoice(
-                $this->invoice,
-                'invoice.issue.' . $this->invoice->id,
-            );
-            return redirect()->route('finance.invoices.show', $this->invoice)
-                ->with('success', 'Invoice issued.');
-        } catch (\RuntimeException $e) {
-            $this->addError('issue', $e->getMessage());
+        $response = app(ApiClient::class)->post('/invoices/' . $this->invoice->id . '/issue', [
+            'idempotency_key' => 'invoice.issue.' . $this->invoice->id,
+        ]);
+
+        if ($response->status() >= 400) {
+            $this->addError('issue', $response->json('message') ?? 'Failed to issue invoice.');
+            return;
         }
+
+        $data          = $response->json();
+        $this->invoice = Invoice::find($data['id']) ?? $this->invoice->fresh();
+
+        return redirect()->route('finance.invoices.show', $this->invoice)
+            ->with('success', 'Invoice issued.');
     }
 
     public function render()

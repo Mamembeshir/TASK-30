@@ -9,7 +9,6 @@ use App\Services\PaymentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
-use Illuminate\Support\Str;
 
 class PaymentApiController extends Controller
 {
@@ -23,7 +22,7 @@ class PaymentApiController extends Controller
      *   tender_type      string   required  (CASH|CHECK|CARD_ON_FILE|WIRE)
      *   amount_cents     int      required  min:1
      *   reference_number string   optional
-     *   idempotency_key  string   optional  (also accepted as Idempotency-Key header)
+     *   idempotency_key  string   required  (also accepted as Idempotency-Key header)
      *
      * 201 Created – Payment JSON
      * 422         – Validation / business rule failure
@@ -35,13 +34,17 @@ class PaymentApiController extends Controller
             'tender_type'      => ['required', 'in:' . implode(',', array_column(TenderType::cases(), 'value'))],
             'amount_cents'     => ['required', 'integer', 'min:1'],
             'reference_number' => ['nullable', 'string', 'max:128'],
-            'idempotency_key'  => ['nullable', 'string', 'max:128'],
+            // Required — the same amount/tender/user tuple can represent two
+            // distinct legitimate payments; there is no stable field combination
+            // from which a deterministic key can be derived.  Callers must
+            // supply a client-generated key (e.g. UUID v4) so that retries
+            // collapse onto the original record instead of creating duplicates.
+            'idempotency_key'  => ['required', 'string', 'max:128'],
         ]);
 
         $user = User::findOrFail($data['user_id']);
         $key  = $data['idempotency_key']
-            ?? $request->header('Idempotency-Key')
-            ?? (string) Str::uuid();
+            ?? $request->header('Idempotency-Key');
 
         try {
             $payment = app(PaymentService::class)->recordPayment(
@@ -65,20 +68,35 @@ class PaymentApiController extends Controller
      *
      * Body:
      *   confirmation_event_id  string  required  (external terminal transaction ID)
+     *   idempotency_key        string  optional  (caller-stable retry key;
+     *                                             defaults to confirmation_event_id)
+     *
+     * Idempotency is two-layered:
+     *   1. `idempotency_key` — deduplicated via IdempotencyStore so retrying the
+     *      same HTTP call never double-confirms.
+     *   2. `confirmation_event_id` — globally unique per payment; the service also
+     *      rejects reuse of the same event ID on a different payment (409).
      *
      * 200 OK  – Payment JSON (status: CONFIRMED)
-     * 422     – Payment not in RECORDED state / event_id already used
+     * 409     – confirmation_event_id already used by a different payment
+     * 422     – Payment not in RECORDED state
      */
     public function confirm(Request $request, Payment $payment): JsonResponse
     {
         $data = $request->validate([
             'confirmation_event_id' => ['required', 'string', 'max:128'],
+            'idempotency_key'       => ['nullable', 'string', 'max:128'],
         ]);
+
+        $idempotencyKey = $data['idempotency_key']
+            ?? $request->header('Idempotency-Key')
+            ?? $data['confirmation_event_id'];
 
         try {
             $confirmed = app(PaymentService::class)->confirmPayment(
                 $payment,
                 $data['confirmation_event_id'],
+                $idempotencyKey,
             );
         } catch (\RuntimeException $e) {
             return $this->serviceError($e);
@@ -100,9 +118,11 @@ class PaymentApiController extends Controller
      */
     public function void(Request $request, Payment $payment): JsonResponse
     {
+        // Deterministic fallback: a given payment can only be voided once, so
+        // the payment ID alone is a stable, collision-free key.
         $key = $request->input('idempotency_key')
             ?? $request->header('Idempotency-Key')
-            ?? (string) Str::uuid();
+            ?? 'payment.void.' . $payment->id;
 
         try {
             $voided = app(PaymentService::class)->voidPayment($payment, $key);

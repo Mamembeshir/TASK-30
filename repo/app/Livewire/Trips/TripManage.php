@@ -7,8 +7,7 @@ use App\Enums\TripStatus;
 use App\Enums\UserRole;
 use App\Models\Doctor;
 use App\Models\Trip;
-use App\Models\User;
-use App\Services\TripService;
+use App\Services\ApiClient;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
 use Livewire\Attributes\Layout;
@@ -69,9 +68,9 @@ class TripManage extends Component
         }
     }
 
-    public function save(TripService $tripService): void
+    public function save(): void
     {
-        $data = $this->validate([
+        $this->validate([
             'title'           => 'required|string|max:300',
             'description'     => 'nullable|string',
             'leadDoctorId'    => 'required|uuid|exists:doctors,id',
@@ -85,63 +84,107 @@ class TripManage extends Component
             'priceCents'      => 'required|integer|min:0',
         ]);
 
-        $payload = [
-            'title'           => $data['title'],
-            'description'     => $data['description'],
-            'lead_doctor_id'  => $data['leadDoctorId'],
-            'specialty'       => $data['specialty'],
-            'destination'     => $data['destination'],
-            'start_date'      => $data['startDate'],
-            'end_date'        => $data['endDate'],
-            'difficulty_level' => $data['difficultyLevel'],
-            'prerequisites'   => $data['prerequisites'],
-            'total_seats'     => $data['totalSeats'],
-            'price_cents'     => $data['priceCents'],
-        ];
+        if ($this->trip?->exists) {
+            // Update existing trip
+            $response = app(ApiClient::class)->put('/admin/trips/' . $this->trip->id, [
+                'title'            => $this->title,
+                'description'      => $this->description,
+                'lead_doctor_id'   => $this->leadDoctorId,
+                'specialty'        => $this->specialty,
+                'destination'      => $this->destination,
+                'start_date'       => $this->startDate,
+                'end_date'         => $this->endDate,
+                'difficulty_level' => $this->difficultyLevel,
+                'prerequisites'    => $this->prerequisites,
+                'total_seats'      => $this->totalSeats,
+                'price_cents'      => $this->priceCents,
+            ]);
 
-        try {
-            if ($this->trip?->exists) {
-                $this->trip = $tripService->update($this->trip, $payload);
-                $this->dispatch('notify', type: 'success', message: 'Trip updated.');
-            } else {
-                $this->createIdempotencyKey ??= (string) Str::uuid();
-                $this->trip = $tripService->create($payload, Auth::user(), $this->createIdempotencyKey);
-                $this->dispatch('notify', type: 'success', message: 'Trip created.');
-                $this->redirectRoute('admin.trips.manage', ['trip' => $this->trip]);
+            if ($response->status() >= 400) {
+                $this->addError('form', $response->json('message') ?? 'Failed to update trip.');
+                return;
             }
-        } catch (\RuntimeException $e) {
-            $this->addError('form', $e->getMessage());
+
+            $data       = $response->json();
+            $this->trip = Trip::find($data['id']) ?? $this->trip->fresh();
+            $this->dispatch('notify', type: 'success', message: 'Trip updated.');
+        } else {
+            // Create new trip
+            $this->createIdempotencyKey ??= (string) Str::uuid();
+
+            $response = app(ApiClient::class)->post('/admin/trips', [
+                'title'            => $this->title,
+                'description'      => $this->description,
+                'lead_doctor_id'   => $this->leadDoctorId,
+                'specialty'        => $this->specialty,
+                'destination'      => $this->destination,
+                'start_date'       => $this->startDate,
+                'end_date'         => $this->endDate,
+                'difficulty_level' => $this->difficultyLevel,
+                'prerequisites'    => $this->prerequisites,
+                'total_seats'      => $this->totalSeats,
+                'price_cents'      => $this->priceCents,
+                'idempotency_key'  => $this->createIdempotencyKey,
+            ]);
+
+            if ($response->status() >= 400) {
+                $this->addError('form', $response->json('message') ?? 'Failed to create trip.');
+                return;
+            }
+
+            $data       = $response->json();
+            $this->trip = Trip::find($data['id']);
+            $this->dispatch('notify', type: 'success', message: 'Trip created.');
+            $this->redirectRoute('admin.trips.manage', ['trip' => $this->trip]);
         }
     }
 
-    public function publish(TripService $tripService): void
+    public function publish(): void
     {
-        try {
-            $this->trip = $tripService->publish($this->trip);
-            $this->dispatch('notify', type: 'success', message: 'Trip published.');
-        } catch (\RuntimeException $e) {
-            $this->addError('status', $e->getMessage());
+        $response = app(ApiClient::class)->post('/admin/trips/' . $this->trip->id . '/publish', [
+            'idempotency_key' => 'trip.publish.' . $this->trip->id,
+        ]);
+
+        if ($response->status() >= 400) {
+            $this->addError('status', $response->json('message') ?? 'Failed to publish trip.');
+            return;
         }
+
+        $data       = $response->json();
+        $this->trip = Trip::find($data['id']) ?? $this->trip->fresh();
+        $this->dispatch('notify', type: 'success', message: 'Trip published.');
     }
 
-    public function close(TripService $tripService): void
+    public function close(): void
     {
-        try {
-            $this->trip = $tripService->close($this->trip);
-            $this->dispatch('notify', type: 'success', message: 'Trip closed for new signups.');
-        } catch (\RuntimeException $e) {
-            $this->addError('status', $e->getMessage());
+        $response = app(ApiClient::class)->post('/admin/trips/' . $this->trip->id . '/close', [
+            'idempotency_key' => 'trip.close.' . $this->trip->id,
+        ]);
+
+        if ($response->status() >= 400) {
+            $this->addError('status', $response->json('message') ?? 'Failed to close trip.');
+            return;
         }
+
+        $data       = $response->json();
+        $this->trip = Trip::find($data['id']) ?? $this->trip->fresh();
+        $this->dispatch('notify', type: 'success', message: 'Trip closed for new signups.');
     }
 
-    public function cancel(TripService $tripService): void
+    public function cancel(): void
     {
-        try {
-            $this->trip = $tripService->cancel($this->trip, Auth::user());
-            $this->dispatch('notify', type: 'success', message: 'Trip cancelled. All signups have been released.');
-        } catch (\RuntimeException $e) {
-            $this->addError('status', $e->getMessage());
+        $response = app(ApiClient::class)->post('/admin/trips/' . $this->trip->id . '/cancel', [
+            'idempotency_key' => 'trip.cancel.' . $this->trip->id,
+        ]);
+
+        if ($response->status() >= 400) {
+            $this->addError('status', $response->json('message') ?? 'Failed to cancel trip.');
+            return;
         }
+
+        $data       = $response->json();
+        $this->trip = Trip::find($data['id']) ?? $this->trip->fresh();
+        $this->dispatch('notify', type: 'success', message: 'Trip cancelled. All signups have been released.');
     }
 
     public function render()

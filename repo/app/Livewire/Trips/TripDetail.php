@@ -8,8 +8,7 @@ use App\Enums\WaitlistStatus;
 use App\Models\Trip;
 use App\Models\TripSignup;
 use App\Models\TripWaitlistEntry;
-use App\Services\SeatService;
-use App\Services\WaitlistService;
+use App\Services\ApiClient;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\On;
@@ -91,76 +90,89 @@ class TripDetail extends Component
 
     // ── Actions ───────────────────────────────────────────────────────────────
 
-    public function holdSeat(SeatService $seatService)
+    public function holdSeat()
     {
         if (! Auth::check()) {
             return $this->redirectRoute('login');
         }
 
-        try {
-            $signup = $seatService->holdSeat($this->trip, Auth::user(), $this->holdIdempotencyKey);
-            $this->mySignup = $signup;
-            $this->trip     = $this->trip->fresh();
+        $response = app(ApiClient::class)->post('/trips/' . $this->trip->id . '/hold', [
+            'idempotency_key' => $this->holdIdempotencyKey,
+        ]);
 
-            $this->dispatch('notify', type: 'success', message: 'Seat held for 10 minutes. Complete your booking before the timer runs out.');
-            $this->redirectRoute('trips.signup', ['trip' => $this->trip, 'signup' => $signup]);
-        } catch (\RuntimeException $e) {
-            $this->addError('hold', $e->getMessage());
+        if ($response->status() >= 400) {
+            $this->addError('hold', $response->json('message') ?? 'Failed to hold seat.');
+            return;
         }
+
+        $data           = $response->json();
+        $this->mySignup = TripSignup::find($data['id']);
+        $this->trip     = $this->trip->fresh();
+
+        $this->dispatch('notify', type: 'success', message: 'Seat held for 10 minutes. Complete your booking before the timer runs out.');
+        $this->redirectRoute('trips.signup', ['trip' => $this->trip, 'signup' => $this->mySignup]);
     }
 
-    public function joinWaitlist(WaitlistService $waitlistService)
+    public function joinWaitlist()
     {
         if (! Auth::check()) {
             return $this->redirectRoute('login');
         }
 
-        try {
-            $entry                 = $waitlistService->joinWaitlist($this->trip, Auth::user(), $this->waitlistIdempotencyKey);
-            $this->myWaitlistEntry = $entry;
-            $this->dispatch('notify', type: 'success', message: "You've been added to the waitlist at position {$entry->position}.");
-        } catch (\RuntimeException $e) {
-            $this->addError('waitlist', $e->getMessage());
+        $response = app(ApiClient::class)->post('/trips/' . $this->trip->id . '/waitlist', [
+            'idempotency_key' => $this->waitlistIdempotencyKey,
+        ]);
+
+        if ($response->status() >= 400) {
+            $this->addError('waitlist', $response->json('message') ?? 'Failed to join waitlist.');
+            return;
         }
+
+        $data                  = $response->json();
+        $this->myWaitlistEntry = TripWaitlistEntry::find($data['id']);
+        $this->dispatch('notify', type: 'success', message: "You've been added to the waitlist at position {$this->myWaitlistEntry->position}.");
     }
 
-    public function acceptOffer(WaitlistService $waitlistService): void
+    public function acceptOffer(): void
     {
         if (! $this->myWaitlistEntry || $this->myWaitlistEntry->status !== WaitlistStatus::OFFERED) {
             return;
         }
 
-        try {
-            // Key is derived from the entry ID so re-clicks / retries reuse the
-            // same hold rather than trying (and failing) to create a second one.
-            $idempotencyKey = 'waitlist-accept-' . $this->myWaitlistEntry->id;
-            $signup         = $waitlistService->acceptOffer($this->myWaitlistEntry, $idempotencyKey);
-            $this->mySignup = $signup;
-            $this->loadUserState();
+        $response = app(ApiClient::class)->post('/waitlist/' . $this->myWaitlistEntry->id . '/accept', [
+            'idempotency_key' => 'waitlist-accept-' . $this->myWaitlistEntry->id,
+        ]);
 
-            $this->dispatch('notify', type: 'success', message: 'Offer accepted! Complete your booking.');
-            $this->redirectRoute('trips.signup', ['trip' => $this->trip, 'signup' => $signup]);
-        } catch (\RuntimeException $e) {
-            $this->addError('offer', $e->getMessage());
+        if ($response->status() >= 400) {
+            $this->addError('offer', $response->json('message') ?? 'Failed to accept offer.');
+            return;
         }
+
+        $data           = $response->json();
+        $this->mySignup = TripSignup::find($data['id']);
+        $this->loadUserState();
+
+        $this->dispatch('notify', type: 'success', message: 'Offer accepted! Complete your booking.');
+        $this->redirectRoute('trips.signup', ['trip' => $this->trip, 'signup' => $this->mySignup]);
     }
 
-    public function declineOffer(WaitlistService $waitlistService): void
+    public function declineOffer(): void
     {
         if (! $this->myWaitlistEntry) {
             return;
         }
 
-        try {
-            $waitlistService->declineOffer(
-                $this->myWaitlistEntry,
-                'waitlist.decline.' . $this->myWaitlistEntry->id,
-            );
-            $this->loadUserState();
-            $this->dispatch('notify', type: 'info', message: 'Offer declined.');
-        } catch (\RuntimeException $e) {
-            $this->addError('offer', $e->getMessage());
+        $response = app(ApiClient::class)->post('/waitlist/' . $this->myWaitlistEntry->id . '/decline', [
+            'idempotency_key' => 'waitlist.decline.' . $this->myWaitlistEntry->id,
+        ]);
+
+        if ($response->status() >= 400) {
+            $this->addError('offer', $response->json('message') ?? 'Failed to decline offer.');
+            return;
         }
+
+        $this->loadUserState();
+        $this->dispatch('notify', type: 'info', message: 'Offer declined.');
     }
 
     public function render()

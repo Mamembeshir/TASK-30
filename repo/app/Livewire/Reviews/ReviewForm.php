@@ -4,7 +4,7 @@ namespace App\Livewire\Reviews;
 
 use App\Models\Trip;
 use App\Models\TripReview;
-use App\Services\ReviewService;
+use App\Services\ApiClient;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\Layout;
 use Livewire\Component;
@@ -42,44 +42,44 @@ class ReviewForm extends Component
         $this->rating = $rating;
     }
 
-    public function submit(ReviewService $reviewService): void
+    public function submit(): void
     {
         $this->validate([
             'rating'     => 'required|integer|min:1|max:5',
             'reviewText' => 'nullable|string|max:2000',
         ]);
 
-        try {
-            if ($this->review?->exists) {
-                $reviewService->update(
-                    $this->review,
-                    Auth::user(),
-                    $this->rating,
-                    $this->reviewText ?: null
-                );
-                $this->dispatch('notify', type: 'success', message: 'Review updated.');
-            } else {
-                // Deterministic key: REV-02 already enforces one review per
-                // (user, trip), so the key is the same natural-key pair. A
-                // double-click returns the first review instead of 422-ing
-                // on the natural-key guard.
-                $idempotencyKey = "review:{$this->trip->id}:" . Auth::id();
+        if ($this->review?->exists) {
+            $response = app(ApiClient::class)->put('/reviews/' . $this->review->id, [
+                'rating'      => $this->rating,
+                'review_text' => $this->reviewText ?: null,
+            ]);
 
-                $reviewService->create(
-                    $this->trip,
-                    Auth::user(),
-                    $this->rating,
-                    $this->reviewText ?: null,
-                    $idempotencyKey
-                );
-                $this->dispatch('notify', type: 'success', message: 'Review submitted. Thank you!');
+            if ($response->status() >= 400) {
+                $this->addError('form', $response->json('message') ?? 'Failed to update review.');
+                return;
             }
 
-            $this->dispatch('review-saved');
-            $this->redirectRoute('trips.show', $this->trip);
-        } catch (\RuntimeException $e) {
-            $this->addError('form', $e->getMessage());
+            $this->dispatch('notify', type: 'success', message: 'Review updated.');
+        } else {
+            $idempotencyKey = "review:{$this->trip->id}:" . Auth::id();
+
+            $response = app(ApiClient::class)->post('/trips/' . $this->trip->id . '/reviews', [
+                'rating'          => $this->rating,
+                'review_text'     => $this->reviewText ?: null,
+                'idempotency_key' => $idempotencyKey,
+            ]);
+
+            if ($response->status() >= 400) {
+                $this->addError('form', $response->json('message') ?? 'Failed to submit review.');
+                return;
+            }
+
+            $this->dispatch('notify', type: 'success', message: 'Review submitted. Thank you!');
         }
+
+        $this->dispatch('review-saved');
+        $this->redirectRoute('trips.show', $this->trip);
     }
 
     public function render()

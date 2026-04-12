@@ -34,7 +34,9 @@ class AuditService
             before:         $before,
             after:          $after,
             ipAddress:      request()?->ip(),
-            idempotencyKey: request()?->header('X-Idempotency-Key'),
+            idempotencyKey: request()?->header('Idempotency-Key')
+                ?? request()?->header('X-Idempotency-Key')
+                ?? request()?->input('idempotency_key'),
             correlationId:  $correlationId ?? $entityId,
         );
     }

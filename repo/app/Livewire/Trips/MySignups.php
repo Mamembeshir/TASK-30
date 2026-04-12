@@ -2,14 +2,11 @@
 
 namespace App\Livewire\Trips;
 
-use App\Enums\SignupStatus;
 use App\Enums\WaitlistStatus;
 use App\Models\TripSignup;
 use App\Models\TripWaitlistEntry;
-use App\Services\SeatService;
-use App\Services\WaitlistService;
+use App\Services\ApiClient;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Str;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\On;
 use Livewire\Component;
@@ -47,50 +44,58 @@ class MySignups extends Component
         return Auth::id();
     }
 
-    public function cancelSignup(string $signupId, SeatService $seatService): void
+    public function cancelSignup(string $signupId): void
     {
         $signup = TripSignup::where('id', $signupId)
             ->where('user_id', Auth::id())
             ->firstOrFail();
 
-        try {
-            if ($signup->status === SignupStatus::CONFIRMED) {
-                $seatService->cancelConfirmedSignup($signup);
-            } elseif ($signup->status === SignupStatus::HOLD) {
-                $seatService->releaseSeat($signup, \App\Enums\HoldReleaseReason::CANCELLED);
-            }
-            $this->dispatch('notify', type: 'success', message: 'Signup cancelled.');
-        } catch (\RuntimeException $e) {
-            $this->addError('cancel', $e->getMessage());
+        $response = app(ApiClient::class)->post('/signups/' . $signup->id . '/cancel');
+
+        if ($response->status() >= 400) {
+            $this->addError('cancel', $response->json('message') ?? 'Failed to cancel signup.');
+            return;
         }
+
+        $this->dispatch('notify', type: 'success', message: 'Signup cancelled.');
     }
 
-    public function acceptOffer(string $entryId, WaitlistService $waitlistService): void
+    public function acceptOffer(string $entryId): void
     {
         $entry = TripWaitlistEntry::where('id', $entryId)
             ->where('user_id', Auth::id())
             ->firstOrFail();
 
-        try {
-            $signup = $waitlistService->acceptOffer($entry, Str::uuid()->toString());
-            $this->dispatch('notify', type: 'success', message: 'Seat offer accepted! Complete your booking.');
-            $this->redirectRoute('trips.signup', ['trip' => $entry->trip, 'signup' => $signup]);
-        } catch (\RuntimeException $e) {
-            $this->addError('offer', $e->getMessage());
+        $response = app(ApiClient::class)->post('/waitlist/' . $entry->id . '/accept', [
+            'idempotency_key' => 'waitlist-accept-' . $entry->id,
+        ]);
+
+        if ($response->status() >= 400) {
+            $this->addError('offer', $response->json('message') ?? 'Failed to accept offer.');
+            return;
         }
+
+        $data   = $response->json();
+        $signup = TripSignup::find($data['id']);
+        $this->dispatch('notify', type: 'success', message: 'Seat offer accepted! Complete your booking.');
+        $this->redirectRoute('trips.signup', ['trip' => $entry->trip, 'signup' => $signup]);
     }
 
-    public function declineOffer(string $entryId, WaitlistService $waitlistService): void
+    public function declineOffer(string $entryId): void
     {
         $entry = TripWaitlistEntry::where('id', $entryId)
             ->where('user_id', Auth::id())
             ->firstOrFail();
 
-        try {
-            $waitlistService->declineOffer($entry, 'waitlist.decline.' . $entry->id);
-            $this->dispatch('notify', type: 'info', message: 'Offer declined.');
-        } catch (\RuntimeException $e) {
-            $this->addError('offer', $e->getMessage());
+        $response = app(ApiClient::class)->post('/waitlist/' . $entry->id . '/decline', [
+            'idempotency_key' => 'waitlist.decline.' . $entry->id,
+        ]);
+
+        if ($response->status() >= 400) {
+            $this->addError('offer', $response->json('message') ?? 'Failed to decline offer.');
+            return;
         }
+
+        $this->dispatch('notify', type: 'info', message: 'Offer declined.');
     }
 }

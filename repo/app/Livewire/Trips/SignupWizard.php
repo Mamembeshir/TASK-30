@@ -3,11 +3,9 @@
 namespace App\Livewire\Trips;
 
 use App\Enums\SignupStatus;
-use App\Enums\TenderType;
 use App\Models\Trip;
 use App\Models\TripSignup;
-use App\Services\PaymentService;
-use App\Services\SeatService;
+use App\Services\ApiClient;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\On;
@@ -89,34 +87,26 @@ class SignupWizard extends Component
         $this->step = max(1, $this->step - 1);
     }
 
-    public function submitPayment(SeatService $seatService, PaymentService $paymentService): void
+    public function submitPayment(): void
     {
         $this->validate([
             'tenderType' => 'required|in:CASH,CHECK,CARD_ON_FILE',
         ]);
 
-        if ($this->signup->isHoldExpired()) {
-            $this->addError('hold', 'Your hold has expired. Please restart the booking.');
+        $response = app(ApiClient::class)->post('/signups/' . $this->signup->id . '/payment', [
+            'tender_type'      => $this->tenderType,
+            'reference_number' => $this->referenceNumber !== '' ? $this->referenceNumber : null,
+            'idempotency_key'  => $this->paymentIdempotencyKey,
+        ]);
+
+        if ($response->status() >= 400) {
+            $this->addError('payment', $response->json('message') ?? 'Payment failed.');
             return;
         }
 
-        try {
-            // Record (not yet confirmed) payment via PaymentService — Finance
-            // confirms it separately. Idempotent on $paymentIdempotencyKey, so
-            // duplicate submissions return the existing Payment row.
-            $payment = $paymentService->recordPayment(
-                Auth::user(),
-                TenderType::from($this->tenderType),
-                (int) $this->signup->trip->price_cents,
-                $this->referenceNumber !== '' ? $this->referenceNumber : null,
-                $this->paymentIdempotencyKey,
-            );
-
-            $this->signup = $seatService->confirmSeat($this->signup, $payment->id);
-            $this->step   = 4; // confirmation screen
-        } catch (\RuntimeException $e) {
-            $this->addError('payment', $e->getMessage());
-        }
+        $data         = $response->json();
+        $this->signup = TripSignup::find($data['signup']['id']);
+        $this->step   = 4; // confirmation screen
     }
 
     public function render()

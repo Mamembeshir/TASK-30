@@ -3,8 +3,7 @@
 namespace App\Livewire\Auth;
 
 use App\Models\UserProfile;
-use App\Services\AuditService;
-use App\Services\EncryptionService;
+use App\Services\ApiClient;
 use App\Services\MaskingService;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Component;
@@ -67,48 +66,34 @@ class Profile extends Component
         ];
     }
 
-    public function save(EncryptionService $encryption): void
+    public function save(): void
     {
         $this->validate();
 
-        $profile = $this->ensureProfile();
-        $before  = $profile->only([
-            'first_name', 'last_name', 'date_of_birth', 'phone',
-            'address_mask', 'ssn_fragment_mask',
-        ]);
+        $body = [
+            'first_name'   => $this->firstName,
+            'last_name'    => $this->lastName,
+        ];
 
-        $profile->first_name    = $this->firstName;
-        $profile->last_name     = $this->lastName;
-        $profile->date_of_birth = $this->dateOfBirth ?: null;
-        $profile->phone         = $this->phone ?: null;
-
-        // Encrypt + mask only when the user supplied a new value. Blank input
-        // means "leave existing encrypted value untouched". An explicit clear
-        // is out of scope for the minimum profile UI.
+        if ($this->dateOfBirth !== null && $this->dateOfBirth !== '') {
+            $body['date_of_birth'] = $this->dateOfBirth;
+        }
+        if ($this->phone !== '') {
+            $body['phone'] = $this->phone;
+        }
         if ($this->address !== '') {
-            $bundle = $encryption->encryptWithMask($this->address, 'address');
-            $profile->address_encrypted = $bundle['encrypted'];
-            $profile->address_mask      = $bundle['mask'];
+            $body['address'] = $this->address;
         }
-
         if ($this->ssnFragment !== '') {
-            $bundle = $encryption->encryptWithMask($this->ssnFragment, 'ssn');
-            $profile->ssn_fragment_encrypted = $bundle['encrypted'];
-            $profile->ssn_fragment_mask      = $bundle['mask'];
+            $body['ssn_fragment'] = $this->ssnFragment;
         }
 
-        $profile->save();
+        $response = app(ApiClient::class)->put('/profile', $body);
 
-        AuditService::record(
-            action:     'user_profile.updated',
-            entityType: 'UserProfile',
-            entityId:   $profile->user_id,
-            before:     $before,
-            after:      $profile->only([
-                'first_name', 'last_name', 'date_of_birth', 'phone',
-                'address_mask', 'ssn_fragment_mask',
-            ]),
-        );
+        if ($response->status() >= 400) {
+            $this->addError('form', $response->json('message') ?? 'Failed to save profile.');
+            return;
+        }
 
         // Clear the typed sensitive values from component state so the next
         // request snapshot does not echo them back to the browser.

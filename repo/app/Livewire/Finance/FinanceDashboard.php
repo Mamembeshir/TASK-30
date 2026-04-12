@@ -10,8 +10,7 @@ use App\Models\Invoice;
 use App\Models\Payment;
 use App\Models\Refund;
 use App\Models\Settlement;
-use App\Services\PaymentService;
-use App\Services\SettlementService;
+use App\Services\ApiClient;
 use Illuminate\Support\Facades\Gate;
 use Livewire\Component;
 
@@ -26,39 +25,53 @@ class FinanceDashboard extends Component
         $this->settlementDate = now()->toDateString();
     }
 
-    public function confirmPayment(string $paymentId, PaymentService $service): void
+    public function confirmPayment(string $paymentId): void
     {
         $payment = Payment::findOrFail($paymentId);
-        try {
-            $service->confirmPayment($payment, 'manual-' . $payment->id);
-            $this->dispatch('notify', type: 'success', message: 'Payment confirmed.');
-        } catch (\RuntimeException $e) {
-            $this->dispatch('notify', type: 'error', message: $e->getMessage());
+
+        $response = app(ApiClient::class)->post('/payments/' . $payment->id . '/confirm', [
+            'confirmation_event_id' => 'manual-' . $payment->id,
+        ]);
+
+        if ($response->status() >= 400) {
+            $this->dispatch('notify', type: 'error', message: $response->json('message') ?? 'Failed to confirm payment.');
+            return;
         }
+
+        $this->dispatch('notify', type: 'success', message: 'Payment confirmed.');
     }
 
-    public function voidPayment(string $paymentId, PaymentService $service): void
+    public function voidPayment(string $paymentId): void
     {
         $payment = Payment::findOrFail($paymentId);
-        try {
-            // Deterministic per-payment key: a double-click collapses to the
-            // already-voided row instead of 422'ing on the second submit.
-            $service->voidPayment($payment, 'payment.void.' . $payment->id);
-            $this->dispatch('notify', type: 'success', message: 'Payment voided.');
-        } catch (\RuntimeException $e) {
-            $this->dispatch('notify', type: 'error', message: $e->getMessage());
+
+        $response = app(ApiClient::class)->post('/payments/' . $payment->id . '/void', [
+            'idempotency_key' => 'payment.void.' . $payment->id,
+        ]);
+
+        if ($response->status() >= 400) {
+            $this->dispatch('notify', type: 'error', message: $response->json('message') ?? 'Failed to void payment.');
+            return;
         }
+
+        $this->dispatch('notify', type: 'success', message: 'Payment voided.');
     }
 
-    public function closeSettlement(SettlementService $service): void
+    public function closeSettlement(): void
     {
         $date = $this->settlementDate ?: now()->toDateString();
-        try {
-            $service->closeDailySettlement($date, 'settlement.close.' . $date);
-            $this->dispatch('notify', type: 'success', message: 'Settlement closed.');
-        } catch (\RuntimeException $e) {
-            $this->addError('settlement', $e->getMessage());
+
+        $response = app(ApiClient::class)->post('/settlements/close', [
+            'date'            => $date,
+            'idempotency_key' => 'settlement.close.' . $date,
+        ]);
+
+        if ($response->status() >= 400) {
+            $this->addError('settlement', $response->json('message') ?? 'Failed to close settlement.');
+            return;
         }
+
+        $this->dispatch('notify', type: 'success', message: 'Settlement closed.');
     }
 
     public function render()

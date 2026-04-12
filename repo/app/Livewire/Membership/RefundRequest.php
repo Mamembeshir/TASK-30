@@ -2,11 +2,9 @@
 
 namespace App\Livewire\Membership;
 
-use App\Enums\RefundType;
 use App\Models\MembershipOrder;
-use App\Services\MembershipService;
+use App\Services\ApiClient;
 use Livewire\Component;
-use RuntimeException;
 
 class RefundRequest extends Component
 {
@@ -32,15 +30,14 @@ class RefundRequest extends Component
         $this->order = $order;
     }
 
-    public function submit(MembershipService $service)
+    public function submit()
     {
         $this->validate();
 
         // Re-check ownership in case the component state was tampered with.
         abort_if((string) $this->order->user_id !== (string) auth()->id(), 403);
 
-        $type         = RefundType::from($this->refundType);
-        $amountCents  = $this->refundType === 'PARTIAL'
+        $amountCents = $this->refundType === 'PARTIAL'
             ? (int) round((float) $this->amountInput * 100)
             : null;
 
@@ -49,10 +46,20 @@ class RefundRequest extends Component
         // existing Refund row via MembershipService::requestRefund's dedupe.
         $key = 'refund-order-' . $this->order->id . '-' . auth()->id();
 
-        try {
-            $service->requestRefund($this->order, $type, $this->reason, $amountCents, $key, auth()->id());
-        } catch (RuntimeException $e) {
-            $this->error = $e->getMessage();
+        $body = [
+            'refund_type'     => $this->refundType,
+            'reason'          => $this->reason,
+            'idempotency_key' => $key,
+        ];
+
+        if ($amountCents !== null) {
+            $body['amount_cents'] = $amountCents;
+        }
+
+        $response = app(ApiClient::class)->post('/membership/orders/' . $this->order->id . '/refund', $body);
+
+        if ($response->status() >= 400) {
+            $this->error = $response->json('message') ?? 'Failed to submit refund request.';
             return;
         }
 

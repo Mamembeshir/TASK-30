@@ -192,6 +192,32 @@ it('validates resolution note minimum length', function () {
         ->assertHasErrors(['resolutionNote']);
 });
 
+it('rejects resolving an exception that belongs to a different settlement', function () {
+    // Guard against tampered component state: an attacker loads SettlementDetail
+    // for settlement A and sets resolveExceptionId to an exception belonging to
+    // settlement B, hoping to resolve it out of context.
+    $specialist  = mkSpecialist();
+    $settlementA = Settlement::factory()->withException()->forToday()->create();
+    $settlementB = Settlement::factory()->withException()->state(['settlement_date' => now()->subDay()->toDateString()])->create();
+
+    $exceptionForB = SettlementException::factory()->create([
+        'settlement_id' => $settlementB->id,
+        'status'        => ExceptionStatus::OPEN->value,
+    ]);
+
+    // Component is mounted on settlement A but resolveExceptionId points to B's exception.
+    Livewire::actingAs($specialist)
+        ->test(SettlementDetail::class, ['settlement' => $settlementA])
+        ->set('resolveExceptionId', $exceptionForB->id)
+        ->set('resolutionType', 'RESOLVED')
+        ->set('resolutionNote', 'Attempting cross-settlement resolve.')
+        ->call('resolveException')
+        ->assertStatus(404);
+
+    // The exception on settlement B must remain OPEN.
+    expect($exceptionForB->fresh()->status)->toBe(ExceptionStatus::OPEN);
+});
+
 // ── InvoiceBuilder ─────────────────────────────────────────────────────────────
 
 it('creates an invoice via InvoiceBuilder', function () {

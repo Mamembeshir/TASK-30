@@ -5,7 +5,7 @@ namespace App\Livewire\Reviews;
 use App\Enums\ReviewStatus;
 use App\Enums\UserRole;
 use App\Models\TripReview;
-use App\Services\ReviewService;
+use App\Services\ApiClient;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
@@ -35,47 +35,48 @@ class ReviewModeration extends Component
         $this->resetPage();
     }
 
-    public function flag(string $reviewId, ReviewService $reviewService): void
+    public function flag(string $reviewId): void
     {
         $review = TripReview::findOrFail($reviewId);
 
-        try {
-            $reviewService->flag($review);
-            $this->dispatch('notify', type: 'warning', message: 'Review flagged.');
-        } catch (\RuntimeException $e) {
-            $this->addError('action', $e->getMessage());
-        }
-    }
+        $response = app(ApiClient::class)->post('/admin/reviews/' . $review->id . '/flag', [
+            'idempotency_key' => 'review.flag.' . $review->id,
+        ]);
 
-    public function remove(string $reviewId, ReviewService $reviewService): void
-    {
-        $review = TripReview::findOrFail($reviewId);
-
-        try {
-            $reviewService->remove($review);
-            $this->dispatch('notify', type: 'success', message: 'Review removed.');
-        } catch (\RuntimeException $e) {
-            $this->addError('action', $e->getMessage());
-        }
-    }
-
-    public function restore(string $reviewId, ReviewService $reviewService): void
-    {
-        $review = TripReview::findOrFail($reviewId);
-
-        if ($review->status !== ReviewStatus::FLAGGED) {
-            $this->addError('action', 'Only flagged reviews can be restored.');
+        if ($response->status() >= 400) {
+            $this->addError('action', $response->json('message') ?? 'Failed to flag review.');
             return;
         }
 
-        $before         = ['status' => $review->status->value];
-        $review->status = ReviewStatus::ACTIVE;
-        $review->saveWithLock();
-        $reviewService->recomputeAverageRating($review->trip);
+        $this->dispatch('notify', type: 'warning', message: 'Review flagged.');
+    }
 
-        \App\Services\AuditService::record('review.restored', 'TripReview', $review->id, $before, [
-            'status' => ReviewStatus::ACTIVE->value,
+    public function remove(string $reviewId): void
+    {
+        $review = TripReview::findOrFail($reviewId);
+
+        $response = app(ApiClient::class)->post('/admin/reviews/' . $review->id . '/remove', [
+            'idempotency_key' => 'review.remove.' . $review->id,
         ]);
+
+        if ($response->status() >= 400) {
+            $this->addError('action', $response->json('message') ?? 'Failed to remove review.');
+            return;
+        }
+
+        $this->dispatch('notify', type: 'success', message: 'Review removed.');
+    }
+
+    public function restore(string $reviewId): void
+    {
+        $review = TripReview::findOrFail($reviewId);
+
+        $response = app(ApiClient::class)->post('/admin/reviews/' . $review->id . '/restore');
+
+        if ($response->status() >= 400) {
+            $this->addError('action', $response->json('message') ?? 'Failed to restore review.');
+            return;
+        }
 
         $this->dispatch('notify', type: 'success', message: 'Review restored.');
     }

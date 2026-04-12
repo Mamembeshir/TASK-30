@@ -38,13 +38,19 @@ done
 
 EXIT_CODE=0
 
-if [ "$RUN_UNIT" = true ]; then
+# Run unit + feature together as a single artisan invocation so PHPUnit
+# collects both suites in one pass.  Splitting into two separate
+# --testsuite flags does not reliably union suites in PHPUnit 10/11 —
+# the last flag silently wins, causing one suite to be skipped.
+if [ "$RUN_UNIT" = true ] && [ "$RUN_FEATURE" = true ]; then
+    echo ""
+    echo "--- Unit + Feature Tests ---"
+    php artisan test || EXIT_CODE=1
+elif [ "$RUN_UNIT" = true ]; then
     echo ""
     echo "--- Unit Tests ---"
     php artisan test --testsuite=Unit || EXIT_CODE=1
-fi
-
-if [ "$RUN_FEATURE" = true ]; then
+elif [ "$RUN_FEATURE" = true ]; then
     echo ""
     echo "--- Feature Tests ---"
     php artisan test --testsuite=Feature || EXIT_CODE=1

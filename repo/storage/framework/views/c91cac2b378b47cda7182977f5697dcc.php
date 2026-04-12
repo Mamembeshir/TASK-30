@@ -35,7 +35,10 @@
                     </div>
                     <div>
                         <dt class="text-gray-500">Lead Physician</dt>
-                        <dd class="font-medium text-gray-900"><?php echo e($trip->doctor?->user?->name ?? '—'); ?></dd>
+                        <dd class="font-medium text-gray-900">
+                            <?php echo e($trip->doctor?->user?->profile?->fullName() ?? $trip->doctor?->user?->username ?? '—'); ?>
+
+                        </dd>
                     </div>
                     <div>
                         <dt class="text-gray-500">Price</dt>

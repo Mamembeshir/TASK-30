@@ -13,6 +13,12 @@ use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class);
 
+// All mutation requests must include a same-origin Origin header so that
+// VerifyApiCsrfToken grants the JSON exemption (mirrors real browser behaviour).
+beforeEach(function () {
+    $this->withHeaders(['Origin' => config('app.url')]);
+});
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function apiReviewer(): User
@@ -146,4 +152,93 @@ it('POST /api/credentialing/cases/{case}/reject returns 422 when notes too short
             'notes' => 'Too short',
         ])
         ->assertStatus(422);
+});
+
+// ── POST /api/credentialing/cases/{case}/start-review ─────────────────────────
+
+it('POST /api/credentialing/cases/{case}/start-review moves SUBMITTED case to INITIAL_REVIEW', function () {
+    $reviewer = apiReviewer();
+    $case     = apiSubmittedCase();
+    $case->update([
+        'assigned_reviewer' => $reviewer->id,
+        'status'            => CaseStatus::SUBMITTED->value,
+    ]);
+
+    $this->actingAs($reviewer)
+        ->postJson("/api/credentialing/cases/{$case->id}/start-review")
+        ->assertOk()
+        ->assertJsonPath('status', CaseStatus::INITIAL_REVIEW->value);
+});
+
+it('POST /api/credentialing/cases/{case}/start-review returns 403 for plain member', function () {
+    $member = User::factory()->create();
+    UserProfile::create(['user_id' => $member->id, 'first_name' => 'Plain', 'last_name' => 'Member']);
+    $member->addRole(UserRole::MEMBER);
+
+    $reviewer = apiReviewer();
+    $case     = apiSubmittedCase();
+    $case->update(['assigned_reviewer' => $reviewer->id]);
+
+    $this->actingAs($member->fresh())
+        ->postJson("/api/credentialing/cases/{$case->id}/start-review")
+        ->assertForbidden();
+});
+
+it('POST /api/credentialing/cases/{case}/start-review returns 422 when case is not in SUBMITTED status', function () {
+    $reviewer = apiReviewer();
+    // Case is already in INITIAL_REVIEW — cannot start review again
+    $case = CredentialingCase::factory()->inReview()->create([
+        'assigned_reviewer' => $reviewer->id,
+    ]);
+
+    $this->actingAs($reviewer)
+        ->postJson("/api/credentialing/cases/{$case->id}/start-review")
+        ->assertStatus(422);
+});
+
+// ── POST /api/credentialing/cases/{case}/request-materials ────────────────────
+
+it('POST /api/credentialing/cases/{case}/request-materials reviewer requests materials with valid notes', function () {
+    $reviewer = apiReviewer();
+    $case     = CredentialingCase::factory()->inReview()->create([
+        'assigned_reviewer' => $reviewer->id,
+    ]);
+
+    $this->actingAs($reviewer)
+        ->postJson("/api/credentialing/cases/{$case->id}/request-materials", [
+            'notes' => 'Please provide updated board certification documents for the current year.',
+        ])
+        ->assertOk()
+        ->assertJsonPath('status', CaseStatus::MORE_MATERIALS_REQUESTED->value);
+});
+
+it('POST /api/credentialing/cases/{case}/request-materials returns 422 when notes too short', function () {
+    $reviewer = apiReviewer();
+    $case     = CredentialingCase::factory()->inReview()->create([
+        'assigned_reviewer' => $reviewer->id,
+    ]);
+
+    $this->actingAs($reviewer)
+        ->postJson("/api/credentialing/cases/{$case->id}/request-materials", [
+            'notes' => 'Too short',
+        ])
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('notes');
+});
+
+it('POST /api/credentialing/cases/{case}/request-materials returns 403 for plain member', function () {
+    $member = User::factory()->create();
+    UserProfile::create(['user_id' => $member->id, 'first_name' => 'Plain', 'last_name' => 'Member']);
+    $member->addRole(UserRole::MEMBER);
+
+    $reviewer = apiReviewer();
+    $case     = CredentialingCase::factory()->inReview()->create([
+        'assigned_reviewer' => $reviewer->id,
+    ]);
+
+    $this->actingAs($member->fresh())
+        ->postJson("/api/credentialing/cases/{$case->id}/request-materials", [
+            'notes' => 'Please send more documentation for verification purposes.',
+        ])
+        ->assertForbidden();
 });

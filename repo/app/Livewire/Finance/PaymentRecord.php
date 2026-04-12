@@ -5,7 +5,7 @@ namespace App\Livewire\Finance;
 use App\Enums\TenderType;
 use App\Enums\UserRole;
 use App\Models\User;
-use App\Services\PaymentService;
+use App\Services\ApiClient;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Str;
 use Livewire\Component;
@@ -61,31 +61,31 @@ class PaymentRecord extends Component
         }
     }
 
-    public function submit(PaymentService $service)
+    public function submit()
     {
         $this->validate([
-            'selectedUserId' => 'required|uuid|exists:users,id',
-            'tenderType'     => 'required|in:' . implode(',', array_column(TenderType::cases(), 'value')),
-            'amountInput'    => 'required|numeric|min:0.01',
+            'selectedUserId'  => 'required|uuid|exists:users,id',
+            'tenderType'      => 'required|in:' . implode(',', array_column(TenderType::cases(), 'value')),
+            'amountInput'     => 'required|numeric|min:0.01',
             'referenceNumber' => 'nullable|string|max:100',
         ]);
 
-        $amountCents = (int) round((float) $this->amountInput * 100);
+        $response = app(ApiClient::class)->post('/payments', [
+            'user_id'          => $this->selectedUserId,
+            'tender_type'      => $this->tenderType,
+            'amount_cents'     => (int) round((float) $this->amountInput * 100),
+            'reference_number' => $this->referenceNumber ?: null,
+            'idempotency_key'  => $this->idempotencyKey,
+        ]);
 
-        try {
-            $payment = $service->recordPayment(
-                User::findOrFail($this->selectedUserId),
-                TenderType::from($this->tenderType),
-                $amountCents,
-                $this->referenceNumber ?: null,
-                $this->idempotencyKey,
-            );
-
-            return redirect()->route('finance.payments.show', $payment)
-                ->with('success', 'Payment recorded.');
-        } catch (\RuntimeException $e) {
-            $this->addError('form', $e->getMessage());
+        if ($response->status() >= 400) {
+            $this->addError('form', $response->json('message') ?? 'Payment failed.');
+            return;
         }
+
+        $data = $response->json();
+        return redirect()->route('finance.payments.show', $data['id'])
+            ->with('success', 'Payment recorded.');
     }
 
     public function render()

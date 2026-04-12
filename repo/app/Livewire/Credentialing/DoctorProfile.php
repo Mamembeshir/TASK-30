@@ -4,10 +4,8 @@ namespace App\Livewire\Credentialing;
 
 use App\Enums\DocumentType;
 use App\Models\Doctor;
-use App\Services\CredentialingService;
-use App\Services\DocumentService;
+use App\Services\ApiClient;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Str;
 use Livewire\Attributes\Layout;
 use Livewire\Component;
 use Livewire\WithFileUploads;
@@ -41,17 +39,15 @@ class DoctorProfile extends Component
             'uploadType' => ['required', 'in:' . implode(',', array_column(DocumentType::cases(), 'value'))],
         ]);
 
-        $service = new DocumentService();
+        $response = app(ApiClient::class)->postWithFile(
+            '/credentialing/doctors/' . $this->doctor->id . '/upload-document',
+            ['document_type' => $this->uploadType],
+            'file',
+            $this->uploadFile
+        );
 
-        try {
-            $service->upload(
-                $this->doctor,
-                $this->uploadFile,
-                DocumentType::from($this->uploadType),
-                Auth::user(),
-            );
-        } catch (\RuntimeException $e) {
-            $this->addError('uploadFile', $e->getMessage());
+        if ($response->status() >= 400) {
+            $this->addError('uploadFile', $response->json('message') ?? 'Failed to upload document.');
             return;
         }
 
@@ -62,17 +58,12 @@ class DoctorProfile extends Component
 
     public function submitCase(): void
     {
-        $service = new CredentialingService();
+        $response = app(ApiClient::class)->post('/credentialing/doctors/' . $this->doctor->id . '/submit-case', [
+            'idempotency_key' => "cred:submit:{$this->doctor->id}:{$this->doctor->credentialing_status->value}",
+        ]);
 
-        // Deterministic key: one submission attempt per (user, doctor, active
-        // case slot). A double-click or network retry collapses onto the same
-        // case row rather than tripping the "already has active case" guard.
-        $idempotencyKey = "cred:submit:{$this->doctor->id}:{$this->doctor->credentialing_status->value}";
-
-        try {
-            $service->submitCase($this->doctor, Auth::user(), $idempotencyKey);
-        } catch (\RuntimeException $e) {
-            $this->addError('submit', $e->getMessage());
+        if ($response->status() >= 400) {
+            $this->addError('submit', $response->json('message') ?? 'Failed to submit case.');
             return;
         }
 
@@ -82,23 +73,10 @@ class DoctorProfile extends Component
 
     public function resubmitCase(): void
     {
-        $activeCase = $this->doctor->activeCase();
+        $response = app(ApiClient::class)->post('/credentialing/doctors/' . $this->doctor->id . '/resubmit-case');
 
-        if (! $activeCase) {
-            $this->addError('submit', 'No active case to resubmit.');
-            return;
-        }
-
-        $service = new CredentialingService();
-
-        try {
-            $service->receiveMaterials(
-                $activeCase,
-                Auth::user(),
-                'credentialing.receive_materials.' . $activeCase->id,
-            );
-        } catch (\RuntimeException $e) {
-            $this->addError('submit', $e->getMessage());
+        if ($response->status() >= 400) {
+            $this->addError('submit', $response->json('message') ?? 'Failed to resubmit case.');
             return;
         }
 

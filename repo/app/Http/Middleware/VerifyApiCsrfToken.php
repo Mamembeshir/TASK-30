@@ -21,15 +21,14 @@ use Symfony\Component\HttpFoundation\Response;
  * a CORS preflight for cross-origin requests; the same-origin policy blocks
  * the preflight unless our CORS configuration explicitly permits it.
  *
- * For requests that supply a JSON Content-Type header we therefore pass
- * through without requiring a CSRF token (the header itself is the proof of
- * browser cooperation).  For any non-JSON POST/PATCH/PUT/DELETE we fall back
- * to the classical token check (_token field or X-CSRF-TOKEN header) so that
- * future non-JSON callers are still protected.
- *
- * This two-tier approach is the same pattern used by Laravel Sanctum's
- * EnsureFrontendRequestsAreStateful middleware and by many production JSON
- * APIs.
+ * For requests that supply a JSON Content-Type header AND a same-origin
+ * `Origin` header we pass through without requiring a CSRF token: the browser
+ * same-origin policy + CORS preflight is the proof of cooperation.  Requests
+ * that lack an `Origin` header (non-browser clients) or whose `Origin` does
+ * not match the application host fall through to the classical token check
+ * (_token body field or X-CSRF-TOKEN header), ensuring that even a client
+ * that holds a stolen session cookie cannot invoke state-changing endpoints
+ * without a synchronizer token.
  */
 class VerifyApiCsrfToken
 {
@@ -48,14 +47,41 @@ class VerifyApiCsrfToken
     }
 
     /**
-     * JSON mutation requests are protected by the same-origin policy + CORS
-     * preflight rather than a synchronizer token.  A cross-origin attacker
-     * cannot set Content-Type: application/json on a simple-request and the
-     * browser will not auto-submit JSON bodies via forms.
+     * JSON mutation requests are exempt from the synchronizer-token check ONLY
+     * when the `Origin` header is present and matches the application host.
+     *
+     * A same-origin browser XHR/fetch always sends `Origin`; a cross-origin
+     * request either lacks a valid `Origin` or gets blocked at the CORS
+     * preflight before it reaches this middleware.  By requiring `Origin` to
+     * be present and correct we also close the stolen-session vector: a
+     * non-browser client that holds a valid session cookie (e.g. via cookie
+     * theft) has no automatic `Origin` header and must therefore supply a
+     * synchronizer token — which it cannot obtain without a prior authenticated
+     * GET to a page that embeds the token.
+     *
+     * Requests without `Origin` (curl, server-to-server, in-process Livewire →
+     * controller calls) fall through to the token check.  In-process calls
+     * never reach this middleware at all; external non-browser callers must
+     * provide a CSRF token.
      */
     private function isJsonRequest(Request $request): bool
     {
-        return $request->isJson();
+        if (! $request->isJson()) {
+            return false;
+        }
+
+        $origin = $request->header('Origin');
+
+        // No Origin header → cannot prove browser same-origin context; deny exemption.
+        if ($origin === null) {
+            return false;
+        }
+
+        // Origin present: only exempt when it matches the application host.
+        $appHost    = parse_url(config('app.url'), PHP_URL_HOST);
+        $originHost = parse_url($origin, PHP_URL_HOST);
+
+        return $appHost !== null && $appHost === $originHost;
     }
 
     private function tokensMatch(Request $request): bool

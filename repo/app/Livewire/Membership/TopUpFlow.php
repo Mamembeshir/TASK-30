@@ -3,10 +3,9 @@
 namespace App\Livewire\Membership;
 
 use App\Models\MembershipPlan;
-use App\Services\MembershipService;
+use App\Services\ApiClient;
 use Illuminate\Support\Str;
 use Livewire\Component;
-use RuntimeException;
 
 class TopUpFlow extends Component
 {
@@ -30,12 +29,14 @@ class TopUpFlow extends Component
         $this->confirmed = true;
     }
 
-    public function submit(MembershipService $service)
+    public function submit()
     {
-        try {
-            $service->topUp(auth()->user(), $this->plan, $this->idempotencyKey);
-        } catch (RuntimeException $e) {
-            $this->error = $e->getMessage();
+        $response = app(ApiClient::class)->post('/membership/plans/' . $this->plan->id . '/top-up', [
+            'idempotency_key' => $this->idempotencyKey,
+        ]);
+
+        if ($response->status() >= 400) {
+            $this->error = $response->json('message') ?? 'Failed to create upgrade order.';
             return;
         }
 

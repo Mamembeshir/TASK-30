@@ -2,11 +2,10 @@
 
 namespace App\Livewire\Credentialing;
 
-use App\Enums\CaseStatus;
 use App\Enums\DocumentType;
 use App\Models\CredentialingCase;
 use App\Models\User;
-use App\Services\CredentialingService;
+use App\Services\ApiClient;
 use App\Services\DocumentService;
 use Livewire\Attributes\Layout;
 use Livewire\Component;
@@ -44,22 +43,13 @@ class CaseDetail extends Component
     {
         $this->validate(['selectedReviewerId' => ['required', 'exists:users,id']]);
 
-        $reviewer = User::findOrFail($this->selectedReviewerId);
-        $service  = new CredentialingService();
+        $response = app(ApiClient::class)->post('/credentialing/cases/' . $this->case->id . '/assign', [
+            'reviewer_id'     => $this->selectedReviewerId,
+            'idempotency_key' => 'credentialing.assign_reviewer.' . $this->case->id . '.' . $this->selectedReviewerId,
+        ]);
 
-        try {
-            // Deterministic per-(case, reviewer) key so that a double-click
-            // trying to assign the same reviewer converges on a no-op. A
-            // *different* reviewer gets a different key, which is correct —
-            // the second assignment would fail the SUBMITTED guard anyway.
-            $service->assignReviewer(
-                $this->case,
-                $reviewer,
-                auth()->user(),
-                'credentialing.assign_reviewer.' . $this->case->id . '.' . $reviewer->id,
-            );
-        } catch (\RuntimeException $e) {
-            $this->addError('action', $e->getMessage());
+        if ($response->status() >= 400) {
+            $this->addError('action', $response->json('message') ?? 'Failed to assign reviewer.');
             return;
         }
 
@@ -70,16 +60,12 @@ class CaseDetail extends Component
 
     public function startReview(): void
     {
-        $service = new CredentialingService();
+        $response = app(ApiClient::class)->post('/credentialing/cases/' . $this->case->id . '/start-review', [
+            'idempotency_key' => 'credentialing.start_review.' . $this->case->id,
+        ]);
 
-        try {
-            $service->startReview(
-                $this->case,
-                auth()->user(),
-                'credentialing.start_review.' . $this->case->id,
-            );
-        } catch (\RuntimeException $e) {
-            $this->addError('action', $e->getMessage());
+        if ($response->status() >= 400) {
+            $this->addError('action', $response->json('message') ?? 'Failed to start review.');
             return;
         }
 
@@ -91,21 +77,13 @@ class CaseDetail extends Component
     {
         $this->validate(['notes' => ['required', 'string', 'min:10']]);
 
-        $service = new CredentialingService();
+        $response = app(ApiClient::class)->post('/credentialing/cases/' . $this->case->id . '/request-materials', [
+            'notes'           => $this->notes,
+            'idempotency_key' => 'credentialing.request_materials.' . $this->case->id . '.' . substr(sha1($this->notes), 0, 12),
+        ]);
 
-        try {
-            // The key includes a hash of the notes so that a second
-            // request-materials action on the *same case with different
-            // notes* is treated as a distinct (legitimate) request, while
-            // a retry with identical notes collapses.
-            $service->requestMaterials(
-                $this->case,
-                auth()->user(),
-                $this->notes,
-                'credentialing.request_materials.' . $this->case->id . '.' . substr(sha1($this->notes), 0, 12),
-            );
-        } catch (\RuntimeException $e) {
-            $this->addError('action', $e->getMessage());
+        if ($response->status() >= 400) {
+            $this->addError('action', $response->json('message') ?? 'Failed to request materials.');
             return;
         }
 
@@ -116,16 +94,12 @@ class CaseDetail extends Component
 
     public function approve(): void
     {
-        $service = new CredentialingService();
+        $response = app(ApiClient::class)->post('/credentialing/cases/' . $this->case->id . '/approve', [
+            'idempotency_key' => 'credentialing.approve.' . $this->case->id,
+        ]);
 
-        try {
-            $service->approve(
-                $this->case,
-                auth()->user(),
-                'credentialing.approve.' . $this->case->id,
-            );
-        } catch (\RuntimeException $e) {
-            $this->addError('action', $e->getMessage());
+        if ($response->status() >= 400) {
+            $this->addError('action', $response->json('message') ?? 'Failed to approve.');
             return;
         }
 
@@ -137,17 +111,13 @@ class CaseDetail extends Component
     {
         $this->validate(['notes' => ['required', 'string', 'min:10']]);
 
-        $service = new CredentialingService();
+        $response = app(ApiClient::class)->post('/credentialing/cases/' . $this->case->id . '/reject', [
+            'notes'           => $this->notes,
+            'idempotency_key' => 'credentialing.reject.' . $this->case->id . '.' . substr(sha1($this->notes), 0, 12),
+        ]);
 
-        try {
-            $service->reject(
-                $this->case,
-                auth()->user(),
-                $this->notes,
-                'credentialing.reject.' . $this->case->id . '.' . substr(sha1($this->notes), 0, 12),
-            );
-        } catch (\RuntimeException $e) {
-            $this->addError('action', $e->getMessage());
+        if ($response->status() >= 400) {
+            $this->addError('action', $response->json('message') ?? 'Failed to reject.');
             return;
         }
 
@@ -163,27 +133,15 @@ class CaseDetail extends Component
             'staffUploadType' => ['required', 'in:' . implode(',', array_column(DocumentType::cases(), 'value'))],
         ]);
 
-        $actor          = auth()->user();
-        $documentService = new DocumentService();
+        $response = app(ApiClient::class)->postWithFile(
+            '/credentialing/cases/' . $this->case->id . '/upload-document',
+            ['document_type' => $this->staffUploadType],
+            'file',
+            $this->staffUploadFile
+        );
 
-        // Object-level authorization: admin or the assigned reviewer on this
-        // case's doctor may upload. Enforced here so the HTTP layer (route)
-        // only needs role-level middleware — fine-grained object access is
-        // handled at the service boundary.
-        if (! $documentService->canUploadFor($this->case->doctor, $actor)) {
-            $this->addError('staffUploadFile', 'You are not authorised to upload documents for this doctor.');
-            return;
-        }
-
-        try {
-            $documentService->upload(
-                $this->case->doctor,
-                $this->staffUploadFile,
-                DocumentType::from($this->staffUploadType),
-                $actor,
-            );
-        } catch (\RuntimeException $e) {
-            $this->addError('staffUploadFile', $e->getMessage());
+        if ($response->status() >= 400) {
+            $this->addError('staffUploadFile', $response->json('message') ?? 'Failed to upload document.');
             return;
         }
 

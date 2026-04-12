@@ -1,38 +1,24 @@
 # MedVoyage — API / Component Reference
 
-> **Two transport layers, one service layer.** The project brief asks
-> for *"Laravel to expose REST-style endpoints consumed by Livewire
-> components."* We satisfy this in full:
+> **REST endpoints consumed by Livewire via HTTP.**
 >
-> 1. **Livewire components** — the primary UI layer. Every browser
->    interaction is a JSON call to `POST /livewire/update`, passing
->    through the `auth` / `account.status` / CSRF middleware stack and
->    delegating to the same service layer described below.
+> The project brief calls for *"Laravel to expose REST-style endpoints
+> consumed by Livewire components."* This is satisfied literally: each
+> Livewire mutation action makes an **actual HTTP POST/PUT call** to the
+> corresponding `/api/*` route via the `ApiClient` service
+> (`app/Services/ApiClient.php`).  The session cookie is forwarded in
+> the request so the `auth:web` guard authenticates the caller without a
+> separate token exchange.
 >
-> 2. **REST `/api/*` namespace** — a thin controller layer that
->    exposes the same business operations as proper HTTP endpoints,
->    consumed by the Livewire components and available for any future
->    integrator. See the **REST API** section at the bottom of this
->    document for the full endpoint list.
+> **One code path.** The `/api/*` controllers are the single, canonical
+> location for all mutation logic — validation, idempotency, optimistic
+> locking, service delegation, audit logging, and response shaping.
+> Both Livewire (via loopback HTTP) and any future external consumer hit
+> exactly the same endpoints and the same guards.
 >
-> All business invariants (idempotency, optimistic locking, role gates,
-> audit chain) live in the service layer and are enforced regardless of
-> which transport is used. **This document is the canonical API reference
-> for reviewers and integrators.** Each Livewire entry lists the route
-> (HTTP GET mounts the component), the callable actions (the "endpoints"
-> in REST terms), parameters, success outcomes, and error codes.
-
-Every row renders as follows:
-
-- **Route** — the URL a browser hits to load the component. This is the
-  GET endpoint; it has no side effects.
-- **Actions** — the Livewire methods that are invokable via
-  `POST /livewire/update`. These are the mutation endpoints.
-- **Auth** — middleware + in-component role/ownership gate.
-- **Parameters** — fields sent in the wire-protocol payload.
-- **Success / Errors** — the same HTTP status codes a REST API would
-  return, surfaced via exception → handler mapping (see
-  "Error Conventions" at the bottom).
+> **Read operations** (list queries, eager-loaded renders) stay in
+> Livewire's `render()` method — they use Eloquent directly and are
+> not exposed as REST endpoints.
 
 ---
 
@@ -465,10 +451,10 @@ Finance endpoints require the `finance` middleware alias (FINANCE_SPECIALIST or 
 | | |
 |---|---|
 | Auth | FINANCE_SPECIALIST or ADMIN |
-| Body | `user_id: uuid`, `tender_type: TenderType`, `amount_cents: int`, `idempotency_key?: string` |
+| Body | `user_id: uuid`, `tender_type: TenderType`, `amount_cents: int`, `idempotency_key: string` **required** |
 | Success | 201 – Payment JSON (`status: RECORDED`) |
-| Errors | 401, 403, 422 – validation failure |
-| Notes | Idempotent on `idempotency_key`; a duplicate key returns the original payment unchanged |
+| Errors | 401, 403, 422 – validation failure (including missing `idempotency_key`) |
+| Notes | `idempotency_key` is **required** — unlike other endpoints there is no safe deterministic fallback (the same user/amount/tender can be two separate legitimate payments). A duplicate key returns the original payment unchanged. |
 
 #### `POST /api/payments/{payment}/confirm`
 | | |

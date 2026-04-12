@@ -10,6 +10,12 @@ use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class);
 
+// All mutation requests must include a same-origin Origin header so that
+// VerifyApiCsrfToken grants the JSON exemption (mirrors real browser behaviour).
+beforeEach(function () {
+    $this->withHeaders(['Origin' => config('app.url')]);
+});
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function apiMember(): User

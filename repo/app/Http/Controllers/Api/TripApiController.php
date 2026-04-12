@@ -9,7 +9,6 @@ use App\Services\WaitlistService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
-use Illuminate\Support\Str;
 
 class TripApiController extends Controller
 {
@@ -63,9 +62,11 @@ class TripApiController extends Controller
             'idempotency_key' => ['nullable', 'string', 'max:128'],
         ]);
 
+        // Deterministic fallback: a user can hold at most one seat per trip,
+        // so user_id + trip_id is a stable, collision-free composite key.
         $key = $request->input('idempotency_key')
             ?? $request->header('Idempotency-Key')
-            ?? (string) Str::uuid();
+            ?? 'trip.hold.' . $trip->id . '.' . $request->user()->id;
 
         try {
             $signup = app(SeatService::class)->holdSeat($trip, $request->user(), $key);
@@ -91,9 +92,11 @@ class TripApiController extends Controller
             'idempotency_key' => ['nullable', 'string', 'max:128'],
         ]);
 
+        // Deterministic fallback: a user can join the waitlist once per trip,
+        // so user_id + trip_id is a stable, collision-free composite key.
         $key = $request->input('idempotency_key')
             ?? $request->header('Idempotency-Key')
-            ?? (string) Str::uuid();
+            ?? 'trip.waitlist.' . $trip->id . '.' . $request->user()->id;
 
         try {
             $entry = app(WaitlistService::class)->joinWaitlist($trip, $request->user(), $key);

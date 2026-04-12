@@ -11,6 +11,12 @@ use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class);
 
+// All mutation requests must include a same-origin Origin header so that
+// VerifyApiCsrfToken grants the JSON exemption (mirrors real browser behaviour).
+beforeEach(function () {
+    $this->withHeaders(['Origin' => config('app.url')]);
+});
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function apiFinanceUser(): User
@@ -93,6 +99,24 @@ it('POST /api/payments returns 422 on missing required fields', function () {
     $this->actingAs($finance)
         ->postJson('/api/payments', [])
         ->assertStatus(422);
+});
+
+it('POST /api/payments returns 422 when idempotency_key is absent', function () {
+    // idempotency_key is required on /api/payments because no deterministic
+    // fallback key is derivable from the payment fields — same user+amount+tender
+    // can represent two separate legitimate payments.
+    $finance = apiFinanceUser();
+    $target  = User::factory()->create();
+
+    $this->actingAs($finance)
+        ->postJson('/api/payments', [
+            'user_id'      => $target->id,
+            'tender_type'  => TenderType::CASH->value,
+            'amount_cents' => 5000,
+            // intentionally no idempotency_key
+        ])
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('idempotency_key');
 });
 
 // ── POST /api/payments/{payment}/confirm ──────────────────────────────────────

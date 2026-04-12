@@ -4,7 +4,7 @@ namespace App\Livewire\Finance;
 
 use App\Enums\UserRole;
 use App\Models\Invoice;
-use App\Services\InvoiceService;
+use App\Services\ApiClient;
 use Illuminate\Support\Facades\Gate;
 use Livewire\Component;
 
@@ -20,31 +20,35 @@ class InvoiceDetail extends Component
         Gate::allowIf(auth()->user()->hasRole(UserRole::FINANCE_SPECIALIST) || auth()->user()->isAdmin());
     }
 
-    public function markPaid(InvoiceService $service): void
+    public function markPaid(): void
     {
-        try {
-            $this->invoice = $service->markPaid(
-                $this->invoice,
-                'invoice.mark_paid.' . $this->invoice->id,
-            );
-            $this->dispatch('notify', type: 'success', message: 'Invoice marked as paid.');
-        } catch (\RuntimeException $e) {
-            $this->addError('paid', $e->getMessage());
+        $response = app(ApiClient::class)->post('/invoices/' . $this->invoice->id . '/mark-paid', [
+            'idempotency_key' => 'invoice.mark_paid.' . $this->invoice->id,
+        ]);
+
+        if ($response->status() >= 400) {
+            $this->addError('paid', $response->json('message') ?? 'Failed to mark invoice as paid.');
+            return;
         }
+
+        $this->invoice = Invoice::find($response->json('id')) ?? $this->invoice->fresh();
+        $this->dispatch('notify', type: 'success', message: 'Invoice marked as paid.');
     }
 
-    public function void(InvoiceService $service): void
+    public function void(): void
     {
-        try {
-            $this->invoice = $service->voidInvoice(
-                $this->invoice,
-                'invoice.void.' . $this->invoice->id,
-            );
-            $this->showVoidConfirm = false;
-            $this->dispatch('notify', type: 'success', message: 'Invoice voided.');
-        } catch (\RuntimeException $e) {
-            $this->addError('void', $e->getMessage());
+        $response = app(ApiClient::class)->post('/invoices/' . $this->invoice->id . '/void', [
+            'idempotency_key' => 'invoice.void.' . $this->invoice->id,
+        ]);
+
+        if ($response->status() >= 400) {
+            $this->addError('void', $response->json('message') ?? 'Failed to void invoice.');
+            return;
         }
+
+        $this->invoice        = Invoice::find($response->json('id')) ?? $this->invoice->fresh();
+        $this->showVoidConfirm = false;
+        $this->dispatch('notify', type: 'success', message: 'Invoice voided.');
     }
 
     public function render()

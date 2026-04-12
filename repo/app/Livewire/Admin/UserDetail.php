@@ -3,10 +3,8 @@
 namespace App\Livewire\Admin;
 
 use App\Enums\UserRole;
-use App\Enums\UserStatus;
-use App\Exceptions\InvalidStatusTransitionException;
 use App\Models\User;
-use App\Services\AuditService;
+use App\Services\ApiClient;
 use Livewire\Attributes\Layout;
 use Livewire\Component;
 
@@ -28,27 +26,27 @@ class UserDetail extends Component
 
     public function transitionTo(string $statusValue): void
     {
-        $newStatus = UserStatus::from($statusValue);
+        $response = app(ApiClient::class)->post('/admin/users/' . $this->user->id . '/transition', [
+            'status' => $statusValue,
+        ]);
 
-        try {
-            $this->user->transitionStatus($newStatus);
-        } catch (InvalidStatusTransitionException $e) {
-            $this->addError('status', $e->getMessage());
+        if ($response->status() >= 400) {
+            $this->addError('status', $response->json('message') ?? 'Failed to transition status.');
             return;
         }
 
         $this->user = $this->user->fresh();
-        session()->flash('success', "Status changed to {$newStatus->label()}.");
+        session()->flash('success', "Status changed to {$statusValue}.");
     }
 
     public function unlock(): void
     {
-        $this->user->forceFill([
-            'failed_login_count' => 0,
-            'locked_until'       => null,
-        ])->save();
+        $response = app(ApiClient::class)->post('/admin/users/' . $this->user->id . '/unlock');
 
-        AuditService::record('user.unlocked', 'User', $this->user->id, null, null);
+        if ($response->status() >= 400) {
+            $this->addError('status', $response->json('message') ?? 'Failed to unlock account.');
+            return;
+        }
 
         $this->user = $this->user->fresh();
         session()->flash('success', 'Account unlocked.');
@@ -58,20 +56,19 @@ class UserDetail extends Component
 
     public function saveRoles(): void
     {
-        $allRoles = UserRole::cases();
+        // Collect selected role values
+        $roles = array_keys(array_filter($this->selectedRoles));
 
-        foreach ($allRoles as $role) {
-            $shouldHave = ! empty($this->selectedRoles[$role->value]);
-            $hasNow     = $this->user->hasRole($role);
+        $response = app(ApiClient::class)->put('/admin/users/' . $this->user->id . '/roles', [
+            'roles' => $roles,
+        ]);
 
-            if ($shouldHave && ! $hasNow) {
-                $this->user->addRole($role);
-            } elseif (! $shouldHave && $hasNow) {
-                $this->user->removeRole($role);
-            }
+        if ($response->status() >= 400) {
+            $this->addError('roles', $response->json('message') ?? 'Failed to save roles.');
+            return;
         }
 
-        $this->user->load('roles');
+        $this->user          = $this->user->fresh(['profile', 'roles']);
         $this->selectedRoles = $this->user->roles->pluck('role')->flip()->map(fn () => true)->toArray();
         session()->flash('success', 'Roles updated.');
     }

@@ -6,9 +6,11 @@ use App\Enums\UserStatus;
 use App\Livewire\Trips\MySignups;
 use App\Livewire\Trips\TripDetail;
 use App\Livewire\Trips\TripList;
+use App\Models\Doctor;
 use App\Models\Trip;
 use App\Models\TripSignup;
 use App\Models\User;
+use App\Models\UserProfile;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 
@@ -50,6 +52,35 @@ it('renders trip detail for a published trip', function () {
         ->assertSee($trip->title)
         ->assertSee('Book a Seat');
 });
+
+it('renders lead physician full name from profile', function () {
+    $member      = User::factory()->create(['status' => UserStatus::ACTIVE]);
+    $doctorUser  = User::factory()->create(['status' => UserStatus::ACTIVE]);
+    UserProfile::create([
+        'user_id'    => $doctorUser->id,
+        'first_name' => 'Ada',
+        'last_name'  => 'Lovelace',
+    ]);
+    $doctor = Doctor::factory()->approved()->create(['user_id' => $doctorUser->id]);
+    $trip   = Trip::factory()->published()->withSeats(5, 5)->create(['lead_doctor_id' => $doctor->id]);
+
+    Livewire::actingAs($member)
+        ->test(TripDetail::class, ['trip' => $trip])
+        ->assertSee('Ada Lovelace');
+});
+
+it('shows job title fallback to username when profile has no name', function () {
+    $member     = User::factory()->create(['status' => UserStatus::ACTIVE]);
+    $doctorUser = User::factory()->create(['status' => UserStatus::ACTIVE, 'username' => 'dr_smith']);
+    // No UserProfile created — fullName() not available; falls back to username.
+    $doctor = Doctor::factory()->approved()->create(['user_id' => $doctorUser->id]);
+    $trip   = Trip::factory()->published()->withSeats(5, 5)->create(['lead_doctor_id' => $doctor->id]);
+
+    Livewire::actingAs($member)
+        ->test(TripDetail::class, ['trip' => $trip])
+        ->assertSee('dr_smith');
+});
+
 
 it('shows join waitlist button when trip is FULL', function () {
     $user = User::factory()->create(['status' => UserStatus::ACTIVE]);

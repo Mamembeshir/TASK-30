@@ -59,17 +59,35 @@ class PaymentService
     // ── Confirm ───────────────────────────────────────────────────────────────
 
     /**
-     * Confirm a RECORDED payment. Idempotent on confirmation_event_id.
+     * Confirm a RECORDED payment.
+     *
+     * Idempotency is two-layered:
+     * 1. `$idempotencyKey` — checked via IdempotencyStore; a retry with the same
+     *    key short-circuits before any state mutation (consistent with all other
+     *    service methods that accept a caller-stable idempotency key).
+     * 2. `$confirmationEventId` — the external terminal transaction ID, stored on
+     *    the payment row and enforced globally unique across all payments.
+     *
+     * @param  string  $idempotencyKey      Caller-stable retry key (defaults to
+     *                                       confirmation_event_id at the controller).
      */
-    public function confirmPayment(Payment $payment, string $confirmationEventId): Payment
-    {
-        // Idempotency: already confirmed with this event → return as-is
-        if ($payment->confirmation_event_id === $confirmationEventId
-            && $payment->status === PaymentStatus::CONFIRMED) {
-            return $payment;
+    public function confirmPayment(
+        Payment $payment,
+        string $confirmationEventId,
+        ?string $idempotencyKey = null,
+    ): Payment {
+        // When no explicit key is supplied (e.g. direct service calls in tests),
+        // fall back to the confirmation_event_id — it is globally unique and
+        // serves as a perfectly valid idempotency token for this operation.
+        $idempotencyKey ??= $confirmationEventId;
+
+        // Layer 1 — idempotency_key short-circuit (same as voidPayment / others)
+        $store = new IdempotencyStore();
+        if ($store->alreadyProcessed($idempotencyKey, 'payment.confirm', $payment->id)) {
+            return $payment->fresh();
         }
 
-        // Also check globally: another payment may have this event ID
+        // Layer 2 — confirmation_event_id global uniqueness check
         $existing = Payment::where('confirmation_event_id', $confirmationEventId)
             ->where('id', '!=', $payment->id)
             ->first();
@@ -84,7 +102,7 @@ class PaymentService
             );
         }
 
-        return DB::transaction(function () use ($payment, $confirmationEventId) {
+        return DB::transaction(function () use ($payment, $confirmationEventId, $idempotencyKey, $store) {
             $before = $payment->toArray();
 
             $payment->status                = PaymentStatus::CONFIRMED;
@@ -97,10 +115,8 @@ class PaymentService
             ]);
 
             // Wire-up: PENDING membership order → PAID.
-            // saveWithLock() (not plain save()) so the PENDING→PAID transition
-            // honors MembershipOrder's row-version guard. A concurrent void or
-            // refund on the same order will surface as StaleRecordException
-            // rather than silently clobbering a terminal state.
+            // saveWithLock() so the PENDING→PAID transition honors
+            // MembershipOrder's row-version guard.
             $order = MembershipOrder::where('payment_id', $payment->id)->first();
             if ($order && $order->status->value === 'PENDING') {
                 $order->status = \App\Enums\OrderStatus::PAID;
@@ -109,6 +125,8 @@ class PaymentService
                     'payment_id' => $payment->id,
                 ]);
             }
+
+            $store->record($idempotencyKey, 'payment.confirm', 'Payment', $payment->id);
 
             return $payment;
         });

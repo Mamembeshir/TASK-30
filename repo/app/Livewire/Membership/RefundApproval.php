@@ -4,10 +4,9 @@ namespace App\Livewire\Membership;
 
 use App\Enums\UserRole as UserRoleEnum;
 use App\Models\Refund;
-use App\Services\MembershipService;
+use App\Services\ApiClient;
 use Illuminate\Support\Facades\Gate;
 use Livewire\Component;
-use RuntimeException;
 
 class RefundApproval extends Component
 {
@@ -21,31 +20,32 @@ class RefundApproval extends Component
         );
     }
 
-    public function approve(string $id, MembershipService $service): void
+    public function approve(string $id): void
     {
         $refund = Refund::findOrFail($id);
 
-        try {
-            // Deterministic per-refund key so that a double-click collapses
-            // to a no-op (returning the already-APPROVED row) instead of
-            // 422'ing on the second submit.
-            $service->approveRefund($refund, auth()->user(), 'refund.approve.' . $refund->id);
-        } catch (RuntimeException $e) {
-            $this->error = $e->getMessage();
+        $response = app(ApiClient::class)->post('/membership/refunds/' . $refund->id . '/approve', [
+            'idempotency_key' => 'refund.approve.' . $refund->id,
+        ]);
+
+        if ($response->status() >= 400) {
+            $this->error = $response->json('message') ?? 'Failed to approve refund.';
             return;
         }
 
         $this->error = '';
     }
 
-    public function process(string $id, MembershipService $service): void
+    public function process(string $id): void
     {
         $refund = Refund::findOrFail($id);
 
-        try {
-            $service->processRefund($refund, 'refund.process.' . $refund->id);
-        } catch (RuntimeException $e) {
-            $this->error = $e->getMessage();
+        $response = app(ApiClient::class)->post('/membership/refunds/' . $refund->id . '/process', [
+            'idempotency_key' => 'refund.process.' . $refund->id,
+        ]);
+
+        if ($response->status() >= 400) {
+            $this->error = $response->json('message') ?? 'Failed to process refund.';
             return;
         }
 

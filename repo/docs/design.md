@@ -52,32 +52,33 @@ Browser
                            └─ success: redirect / emit event
 ```
 
-### "REST-style endpoints" — reconciling the prompt with Livewire 3
+### "REST-style endpoints" — architecture
 
-The project prompt (see `metadata.json`) calls for *"Laravel to expose
-REST-style endpoints consumed by Livewire components"*. In modern Laravel
-11 + Livewire 3 this is **already what we do**, just not as hand-authored
-per-resource routes. Every `wire:click` action flows through a single
-HTTP endpoint (`POST /livewire/update`) that accepts a JSON payload of
-`{component, snapshot, calls: [{method, params}]}` and returns a JSON
-patch. Under the hood:
+The project prompt calls for *"Laravel to expose REST-style endpoints
+consumed by Livewire components"*. The implementation uses a **shared
+controller layer**:
 
-- Transport is HTTP + JSON.
-- Every call passes through the normal Laravel middleware stack
-  (`auth`, `account.status`, CSRF, throttle). There is no bypass.
-- Validation uses the standard `Livewire\Validate` / `$rules` pipeline
-  and surfaces as 422 with the same shape a FormRequest would emit.
-- Idempotency keys (`idempotency_key` column + `MembershipService` /
-  `PaymentService` dedupe) are enforced at the **service layer**, so
-  every mutation path — HTTP or queue worker — passes through the
-  same guard.
-- Optimistic locking (`saveWithLock()` → `StaleRecordException` → 409)
-  is also at the service layer for the same reason.
+- All mutation logic lives in `App\Http\Controllers\Api\*` controllers.
+- Livewire mutation actions invoke those controllers **in-process** (a
+  direct PHP call) so both entry points — Livewire and external HTTP —
+  execute identical validation, service delegation, and response shaping.
+- The Livewire wire protocol (`POST /livewire/update`) carries UI
+  interactions to the server; it is not an alias for the REST API.
+
+Properties of the shared layer:
+
+- Every Livewire mutation constructs an `Illuminate\Http\Request`,
+  calls the controller method, and interprets the `JsonResponse`.
+- Validation, idempotency deduplication, optimistic locking, role gates,
+  and audit logging are all enforced inside the controller → service
+  chain, so they apply identically regardless of which entry point is
+  used.
 - The complete list of component routes, actions, parameters, auth
   gates, success redirects, and error codes lives in
   `docs/api-spec.md` and is treated as the canonical API reference.
 
-**Two transport layers share a single service layer.**
+**Two entry points (Livewire in-process + external HTTP) share one
+controller layer, which shares one service layer.**
 
 A thin `App\Http\Controllers\Api\*` namespace exposes the same operations
 as the Livewire components via proper REST routes registered under the
@@ -117,9 +118,16 @@ same guard.
 
 Livewire component mutations still go through `POST /livewire/update`
 (the wire-protocol endpoint) and continue to be the primary UI path.
-The REST layer exists to satisfy the prompt's "REST-style endpoints
-consumed by Livewire components" requirement and to provide a documented
-machine-to-machine surface.
+Livewire mutation actions (e.g. `holdSeat`, `submitPayment`,
+`assignReviewer`) delegate to the corresponding `/api/*` controller
+method **in-process** — a direct PHP call, not an HTTP round-trip —
+constructing an `Illuminate\Http\Request` from the component's validated
+state and interpreting the `JsonResponse` the controller returns. This
+gives one code path for all writes (controller validation → service
+layer → response) without the loopback-HTTP complexity. The REST layer
+is separately available as a documented HTTP surface for external
+integrators; those callers reach the same controllers over the network
+through the full middleware stack.
 
 ### Scheduled Commands
 
