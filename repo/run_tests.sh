@@ -14,6 +14,12 @@ if [ ! -f /.dockerenv ]; then
     exit $?
 fi
 
+# ── Install dependencies if vendor is missing (CI environments) ──────────────
+if [ ! -d vendor ]; then
+    echo "vendor/ not found — running composer install …"
+    composer install --no-interaction --prefer-dist --quiet
+fi
+
 # ── Generate .env.testing from .env.example if it does not exist ──────────────
 if [ ! -f .env.testing ]; then
     if [ ! -f .env.example ]; then
