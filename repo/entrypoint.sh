@@ -12,6 +12,16 @@ until pg_isready -h "${DB_HOST:-db}" -p "${DB_PORT:-5432}" -U "${DB_USERNAME:-me
 done
 echo "      PostgreSQL is ready."
 
+# ── 1b. Ensure PHP vendor dependencies are present ──────────────────────────
+# The volume mount (.:/var/www/html) can overwrite vendor/ from the image.
+# This must run before any php artisan command.
+if [ ! -f vendor/autoload.php ]; then
+    echo "      vendor/ missing — running composer install..."
+    composer install --no-interaction --no-scripts --prefer-dist --quiet
+    composer run-script post-autoload-dump 2>/dev/null || true
+    echo "      Composer install complete."
+fi
+
 # ── 2. Ensure .env exists and has APP_KEY ────────────────────────────────────
 echo "[2/7] Checking .env..."
 if [ ! -f .env ]; then
@@ -40,14 +50,6 @@ PGPASSWORD="${DB_PASSWORD:-secret}" psql \
         -c "CREATE DATABASE \"${DB_DATABASE:-medvoyage}_test\";" \
   && echo "      Test database ready." \
   || echo "      Test database already exists."
-
-# ── 3b. Ensure PHP vendor dependencies are present ───────────────────────────
-if [ ! -f vendor/autoload.php ]; then
-    echo "      vendor/ missing — running composer install..."
-    composer install --no-interaction --no-scripts --prefer-dist --quiet
-    composer run-script post-autoload-dump 2>/dev/null || true
-    echo "      Composer install complete."
-fi
 
 # ── 4. Build frontend assets ─────────────────────────────────────────────────
 echo "[4/7] Building frontend assets (Tailwind + Alpine.js via Vite)..."
@@ -104,5 +106,11 @@ echo "  App URL:    http://localhost:8000"
 echo "  Reverb WS:  ws://localhost:8080"
 echo "  Tests:      ./run_tests.sh  (or: make test)"
 echo "============================================"
+
+# If a command was passed (e.g. `docker compose run app bash run_tests.sh`),
+# execute it instead of starting the web server.
+if [ $# -gt 0 ]; then
+    exec "$@"
+fi
 
 exec php artisan serve --host=0.0.0.0 --port=8000

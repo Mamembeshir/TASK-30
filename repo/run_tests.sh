@@ -9,15 +9,16 @@ echo "MedVoyage Test Suite"
 echo "===================="
 
 # ── Ensure tests run inside the Docker app container ─────────────────────────
-# If vendor/autoload.php exists at /var/www/html we are already inside the app
-# container. Otherwise we are on the host or a CI runner — build the images,
-# start the DB, and run a one-off app container for the test suite.
+# /var/www/html/vendor/autoload.php only exists inside the built app image.
+# Everywhere else (host, CI runner, CodeBuild) we delegate into Docker.
 if [ ! -f /var/www/html/vendor/autoload.php ]; then
     docker compose build --quiet
-    docker compose up -d db            # start DB only; the run container talks to it
+    docker compose up -d db
+    # 'run' creates a fresh container. The entrypoint handles DB wait,
+    # migrations, vendor install, then exec's the passed command.
     docker compose run --rm app bash run_tests.sh "$@"
     EXIT=$?
-    rm -rf storage/framework/testing   # clean up volume-mount artifacts
+    rm -rf storage/framework/testing
     exit $EXIT
 fi
 
@@ -33,7 +34,6 @@ if [ ! -f .env.testing ]; then
     cp .env.example .env.testing
     sed -i 's/^APP_ENV=.*/APP_ENV=testing/'                .env.testing
     sed -i 's/^DB_DATABASE=.*/DB_DATABASE=medvoyage_test/' .env.testing
-    # Generate an APP_KEY if the example ships with an empty one
     if grep -q '^APP_KEY=$' .env.testing; then
         APP_KEY="base64:$(php -r 'echo base64_encode(random_bytes(32));')"
         sed -i "s|^APP_KEY=.*|APP_KEY=$APP_KEY|" .env.testing
@@ -45,7 +45,6 @@ RUN_FEATURE=false
 RUN_FRONTEND=false
 COVERAGE=false
 
-# No flags → run everything
 if [ $# -eq 0 ]; then
     RUN_UNIT=true
     RUN_FEATURE=true
@@ -90,7 +89,6 @@ if [ "$COVERAGE" = true ]; then
     php artisan test --coverage --min=80 || EXIT_CODE=1
 fi
 
-# ── Clean up temp artifacts left by Storage::fake() ──────────────────────────
 rm -rf storage/framework/testing
 
 echo ""
