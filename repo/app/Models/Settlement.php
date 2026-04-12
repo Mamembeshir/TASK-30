@@ -24,7 +24,7 @@ class Settlement extends Model
     {
         return [
             'status'                 => SettlementStatus::class,
-            'settlement_date'        => 'date',
+            'settlement_date'        => 'date:Y-m-d',
             'total_payments_cents'   => 'integer',
             'total_refunds_cents'    => 'integer',
             'net_amount_cents'       => 'integer',

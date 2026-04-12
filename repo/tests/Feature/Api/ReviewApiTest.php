@@ -40,7 +40,10 @@ function reviewAdmin(): User
 
 it('POST /api/trips/{trip}/reviews allows eligible member with confirmed signup to create a review', function () {
     $user   = reviewMember();
-    $trip   = Trip::factory()->published()->withSeats(5, 4)->create();
+    $trip   = Trip::factory()->published()->withSeats(5, 4)->create([
+        'start_date' => now()->subDays(10),
+        'end_date'   => now()->subDays(3),
+    ]);
     $signup = TripSignup::factory()->confirmed()->create([
         'user_id' => $user->id,
         'trip_id' => $trip->id,
@@ -58,7 +61,10 @@ it('POST /api/trips/{trip}/reviews allows eligible member with confirmed signup 
 
 it('POST /api/trips/{trip}/reviews is idempotent on same key', function () {
     $user   = reviewMember();
-    $trip   = Trip::factory()->published()->withSeats(5, 4)->create();
+    $trip   = Trip::factory()->published()->withSeats(5, 4)->create([
+        'start_date' => now()->subDays(10),
+        'end_date'   => now()->subDays(3),
+    ]);
     $signup = TripSignup::factory()->confirmed()->create([
         'user_id' => $user->id,
         'trip_id' => $trip->id,

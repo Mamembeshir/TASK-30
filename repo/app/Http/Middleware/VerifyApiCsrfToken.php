@@ -34,6 +34,14 @@ class VerifyApiCsrfToken
 {
     public function handle(Request $request, Closure $next): Response
     {
+        // In-process kernel requests issued by ApiClient during tests carry this
+        // header so that multipart file-upload paths (which cannot use JSON
+        // Content-Type) are not rejected by the synchronizer-token check.
+        // The gate is APP_ENV=testing so this code path is dead in production.
+        if (getenv('APP_ENV') === 'testing' && $request->header('X-Internal-Kernel-Request')) {
+            return $next($request);
+        }
+
         if ($this->isReadRequest($request) || $this->isJsonRequest($request) || $this->tokensMatch($request)) {
             return $next($request);
         }

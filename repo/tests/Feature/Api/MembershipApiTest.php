@@ -92,8 +92,12 @@ it('POST /api/membership/plans/{plan}/purchase returns 401 when unauthenticated'
 // ── POST /api/membership/plans/{plan}/top-up ──────────────────────────────────
 
 it('POST /api/membership/plans/{plan}/top-up succeeds when member has active membership', function () {
-    $member = membershipMember();
-    MembershipOrder::factory()->active()->create(['user_id' => $member->id]);
+    $member    = membershipMember();
+    $basicPlan = MembershipPlan::factory()->basic()->create();
+    MembershipOrder::factory()->active()->create([
+        'user_id' => $member->id,
+        'plan_id' => $basicPlan->id,
+    ]);
     $plan = MembershipPlan::factory()->premium()->create();
 
     $this->actingAs($member)

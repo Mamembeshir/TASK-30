@@ -16,7 +16,7 @@ beforeEach(function () {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function adminUser(): User
+function userApiAdmin(): User
 {
     $user = User::factory()->create();
     UserProfile::create(['user_id' => $user->id, 'first_name' => 'Admin', 'last_name' => 'User']);
@@ -24,7 +24,7 @@ function adminUser(): User
     return $user->fresh();
 }
 
-function plainMemberUser(): User
+function userApiPlainMember(): User
 {
     $user = User::factory()->create();
     UserProfile::create(['user_id' => $user->id, 'first_name' => 'Plain', 'last_name' => 'Member']);
@@ -35,7 +35,7 @@ function plainMemberUser(): User
 // ── POST /api/admin/users/{user}/transition ───────────────────────────────────
 
 it('POST /api/admin/users/{user}/transition admin transitions PENDING user to ACTIVE', function () {
-    $admin  = adminUser();
+    $admin  = userApiAdmin();
     $target = User::factory()->pending()->create();
 
     $this->actingAs($admin)
@@ -47,7 +47,7 @@ it('POST /api/admin/users/{user}/transition admin transitions PENDING user to AC
 });
 
 it('POST /api/admin/users/{user}/transition returns 403 for non-admin', function () {
-    $member = plainMemberUser();
+    $member = userApiPlainMember();
     $target = User::factory()->pending()->create();
 
     $this->actingAs($member)
@@ -58,7 +58,7 @@ it('POST /api/admin/users/{user}/transition returns 403 for non-admin', function
 });
 
 it('POST /api/admin/users/{user}/transition returns 422 on invalid status value', function () {
-    $admin  = adminUser();
+    $admin  = userApiAdmin();
     $target = User::factory()->create();
 
     $this->actingAs($admin)
@@ -70,7 +70,7 @@ it('POST /api/admin/users/{user}/transition returns 422 on invalid status value'
 
 it('POST /api/admin/users/{user}/transition returns 422 on invalid transition (ACTIVE to PENDING)', function () {
     // ACTIVE → PENDING is not an allowed transition; only SUSPENDED and DEACTIVATED are.
-    $admin  = adminUser();
+    $admin  = userApiAdmin();
     $target = User::factory()->create(); // default status is ACTIVE
 
     $this->actingAs($admin)
@@ -83,7 +83,7 @@ it('POST /api/admin/users/{user}/transition returns 422 on invalid transition (A
 // ── POST /api/admin/users/{user}/unlock ───────────────────────────────────────
 
 it('POST /api/admin/users/{user}/unlock resets failed_login_count and locked_until', function () {
-    $admin  = adminUser();
+    $admin  = userApiAdmin();
     $target = User::factory()->create([
         'failed_login_count' => 5,
         'locked_until'       => now()->addHour(),
@@ -97,7 +97,7 @@ it('POST /api/admin/users/{user}/unlock resets failed_login_count and locked_unt
 });
 
 it('POST /api/admin/users/{user}/unlock returns 403 for non-admin', function () {
-    $member = plainMemberUser();
+    $member = userApiPlainMember();
     $target = User::factory()->create(['failed_login_count' => 3]);
 
     $this->actingAs($member)
@@ -108,7 +108,7 @@ it('POST /api/admin/users/{user}/unlock returns 403 for non-admin', function () 
 // ── PUT /api/admin/users/{user}/roles ─────────────────────────────────────────
 
 it('PUT /api/admin/users/{user}/roles admin assigns roles to a user', function () {
-    $admin  = adminUser();
+    $admin  = userApiAdmin();
     $target = User::factory()->create();
 
     $this->actingAs($admin)
@@ -121,7 +121,7 @@ it('PUT /api/admin/users/{user}/roles admin assigns roles to a user', function (
 });
 
 it('PUT /api/admin/users/{user}/roles admin removes all roles by passing empty array', function () {
-    $admin  = adminUser();
+    $admin  = userApiAdmin();
     $target = User::factory()->create();
     $target->addRole(UserRole::MEMBER);
 
@@ -135,7 +135,7 @@ it('PUT /api/admin/users/{user}/roles admin removes all roles by passing empty a
 });
 
 it('PUT /api/admin/users/{user}/roles returns 403 for non-admin', function () {
-    $member = plainMemberUser();
+    $member = userApiPlainMember();
     $target = User::factory()->create();
 
     $this->actingAs($member)
@@ -146,7 +146,7 @@ it('PUT /api/admin/users/{user}/roles returns 403 for non-admin', function () {
 });
 
 it('PUT /api/admin/users/{user}/roles returns 422 on invalid role value', function () {
-    $admin  = adminUser();
+    $admin  = userApiAdmin();
     $target = User::factory()->create();
 
     $this->actingAs($admin)

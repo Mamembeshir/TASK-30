@@ -98,7 +98,7 @@ class UserApiController extends Controller
     public function saveRoles(Request $request, User $user): JsonResponse
     {
         $data = $request->validate([
-            'roles'          => ['required', 'array'],
+            'roles'          => ['present', 'array'],
             'roles.*'        => ['string', 'in:' . implode(',', array_column(UserRole::cases(), 'value'))],
             'idempotency_key' => ['nullable', 'string', 'max:128'],
         ]);
