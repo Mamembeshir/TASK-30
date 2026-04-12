@@ -191,6 +191,7 @@ class CredentialingApiController extends Controller
      * Body (multipart/form-data):
      *   file             file    required  max:10 MB
      *   document_type    string  required  (DocumentType enum value)
+     *   idempotency_key  string  optional  (or Idempotency-Key header)
      *
      * 201 Created – DoctorDocument JSON
      * 403         – Actor not authorised to upload for this doctor
@@ -199,8 +200,9 @@ class CredentialingApiController extends Controller
     public function uploadDocumentForCase(Request $request, CredentialingCase $case): JsonResponse
     {
         $data = $request->validate([
-            'file'          => ['required', 'file', 'max:10240'],
-            'document_type' => ['required', 'in:' . implode(',', array_column(DocumentType::cases(), 'value'))],
+            'file'            => ['required', 'file', 'max:10240'],
+            'document_type'   => ['required', 'in:' . implode(',', array_column(DocumentType::cases(), 'value'))],
+            'idempotency_key' => ['nullable', 'string', 'max:128'],
         ]);
 
         $documentService = app(DocumentService::class);
@@ -209,12 +211,17 @@ class CredentialingApiController extends Controller
             return response()->json(['message' => 'You are not authorised to upload documents for this doctor.'], 403);
         }
 
+        $key = $data['idempotency_key']
+            ?? $request->header('Idempotency-Key')
+            ?? 'credentialing.document.upload.' . $case->doctor_id . '.' . $data['document_type'];
+
         try {
             $doc = $documentService->upload(
                 $case->doctor,
                 $request->file('file'),
                 DocumentType::from($data['document_type']),
                 $request->user(),
+                $key,
             );
         } catch (\RuntimeException $e) {
             return $this->serviceError($e);
@@ -231,6 +238,7 @@ class CredentialingApiController extends Controller
      * Body (multipart/form-data):
      *   file             file    required  max:10 MB
      *   document_type    string  required  (DocumentType enum value)
+     *   idempotency_key  string  optional  (or Idempotency-Key header)
      *
      * 201 Created – DoctorDocument JSON
      * 403         – Caller is not the doctor
@@ -244,9 +252,14 @@ class CredentialingApiController extends Controller
         }
 
         $data = $request->validate([
-            'file'          => ['required', 'file', 'max:10240'],
-            'document_type' => ['required', 'in:' . implode(',', array_column(DocumentType::cases(), 'value'))],
+            'file'            => ['required', 'file', 'max:10240'],
+            'document_type'   => ['required', 'in:' . implode(',', array_column(DocumentType::cases(), 'value'))],
+            'idempotency_key' => ['nullable', 'string', 'max:128'],
         ]);
+
+        $key = $data['idempotency_key']
+            ?? $request->header('Idempotency-Key')
+            ?? 'credentialing.document.upload.' . $doctor->id . '.' . $data['document_type'];
 
         try {
             $doc = app(DocumentService::class)->upload(
@@ -254,6 +267,7 @@ class CredentialingApiController extends Controller
                 $request->file('file'),
                 DocumentType::from($data['document_type']),
                 $request->user(),
+                $key,
             );
         } catch (\RuntimeException $e) {
             return $this->serviceError($e);

@@ -3,6 +3,7 @@
 namespace App\Livewire\Search;
 
 use App\Enums\TripDifficulty;
+use App\Services\ApiClient;
 use App\Services\SearchService;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
@@ -93,8 +94,12 @@ class TripSearch extends Component
     {
         $user = auth()->user();
         if ($user) {
-            app(SearchService::class)->clearHistory($user);
-            $this->dispatch('notify', type: 'success', message: 'Search history cleared.');
+            $response = app(ApiClient::class)->post('/search/history/clear');
+            if ($response->successful()) {
+                $this->dispatch('notify', type: 'success', message: 'Search history cleared.');
+            } else {
+                $this->dispatch('notify', type: 'error', message: 'Failed to clear search history.');
+            }
         }
     }
 

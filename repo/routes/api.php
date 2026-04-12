@@ -22,6 +22,7 @@ use App\Http\Controllers\Api\MembershipApiController;
 use App\Http\Controllers\Api\PaymentApiController;
 use App\Http\Controllers\Api\ProfileApiController;
 use App\Http\Controllers\Api\ReviewApiController;
+use App\Http\Controllers\Api\SearchApiController;
 use App\Http\Controllers\Api\SettlementApiController;
 use App\Http\Controllers\Api\SignupApiController;
 use App\Http\Controllers\Api\TripApiController;
@@ -63,6 +64,9 @@ Route::middleware(['auth:web', 'account.status'])->group(function () {
 
     // Profile — authenticated user
     Route::put('/profile',                        [ProfileApiController::class, 'save']);
+
+    // Search — authenticated user
+    Route::post('/search/history/clear',          [SearchApiController::class, 'clearHistory']);
 
     // Membership — member-facing
     Route::post('/membership/plans/{plan}/purchase',  [MembershipApiController::class, 'purchase']);

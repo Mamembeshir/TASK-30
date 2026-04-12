@@ -31,7 +31,19 @@ class DocumentService
         UploadedFile $file,
         DocumentType $type,
         User         $uploader,
+        ?string      $idempotencyKey = null,
     ): DoctorDocument {
+        // ── Idempotency check ────────────────────────────────────────────────
+        if ($idempotencyKey) {
+            $store = new IdempotencyStore();
+            if ($store->alreadyProcessed($idempotencyKey, 'credentialing.document.upload', $doctor->id)) {
+                return DoctorDocument::where('doctor_id', $doctor->id)
+                    ->where('document_type', $type->value)
+                    ->latest()
+                    ->firstOrFail();
+            }
+        }
+
         // ── File type validation ──────────────────────────────────────────────
         $mime = $file->getMimeType();
         $ext  = strtolower($file->getClientOriginalExtension());
@@ -83,6 +95,12 @@ class DocumentService
             null,
             ['type' => $type->value, 'doctor_id' => $doctor->id],
         );
+
+        // ── Record idempotency ───────────────────────────────────────────────
+        if ($idempotencyKey) {
+            $store = $store ?? new IdempotencyStore();
+            $store->record($idempotencyKey, 'credentialing.document.upload', 'DoctorDocument', $doc->id);
+        }
 
         return $doc;
     }
