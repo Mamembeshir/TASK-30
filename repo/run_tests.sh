@@ -8,17 +8,25 @@ set -e
 echo "MedVoyage Test Suite"
 echo "===================="
 
-# If running on the host, proxy into the app container
-if [ ! -f /.dockerenv ]; then
-    docker compose exec app bash run_tests.sh "$@"
-    exit $?
+# ── Always run inside the Docker app container ────────────────────────────────
+# Detect whether we are already inside the app container by checking a known
+# path written by the Dockerfile / entrypoint.  Everything outside (host,
+# CI runner, CodeBuild container) builds + starts the stack first.
+if [ "$(pwd)" != "/var/www/html" ] || [ ! -f vendor/autoload.php ]; then
+    # Ensure images are built and containers are up
+    docker compose build --quiet 2>/dev/null || docker-compose build --quiet
+    docker compose up -d --wait 2>/dev/null || docker-compose up -d
+
+    docker compose exec app bash run_tests.sh "$@" || docker-compose exec app bash run_tests.sh "$@"
+    EXIT=$?
+
+    # Clean up temp artifacts that leak through the volume mount
+    rm -rf storage/framework/testing
+
+    exit $EXIT
 fi
 
-# ── Install dependencies if vendor is missing (CI environments) ──────────────
-if [ ! -d vendor ]; then
-    echo "vendor/ not found — running composer install …"
-    composer install --no-interaction --prefer-dist --quiet
-fi
+# ── From here we are inside the Docker app container ──────────────────────────
 
 # ── Generate .env.testing from .env.example if it does not exist ──────────────
 if [ ! -f .env.testing ]; then
@@ -32,7 +40,7 @@ if [ ! -f .env.testing ]; then
     sed -i 's/^APP_ENV=.*/APP_ENV=testing/'           .env.testing
     sed -i 's/^DB_DATABASE=.*/DB_DATABASE=medvoyage_test/' .env.testing
     # Generate an APP_KEY if the example ships with an empty one (uses pure
-    # PHP so it works before composer install / vendor is available).
+    # PHP so it works before artisan is available).
     if grep -q '^APP_KEY=$' .env.testing; then
         APP_KEY="base64:$(php -r 'echo base64_encode(random_bytes(32));')"
         sed -i "s|^APP_KEY=.*|APP_KEY=$APP_KEY|" .env.testing
