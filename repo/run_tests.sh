@@ -14,6 +14,23 @@ if [ ! -f /.dockerenv ]; then
     exit $?
 fi
 
+# ── Generate .env.testing from .env.example if it does not exist ──────────────
+if [ ! -f .env.testing ]; then
+    if [ ! -f .env.example ]; then
+        echo "ERROR: .env.example not found — cannot generate .env.testing"
+        exit 1
+    fi
+    echo "Generating .env.testing from .env.example …"
+    cp .env.example .env.testing
+    # Override values that must differ for the test environment
+    sed -i 's/^APP_ENV=.*/APP_ENV=testing/'           .env.testing
+    sed -i 's/^DB_DATABASE=.*/DB_DATABASE=medvoyage_test/' .env.testing
+    # Generate an APP_KEY if the example ships with an empty one
+    if grep -q '^APP_KEY=$' .env.testing; then
+        php artisan key:generate --env=testing --no-interaction --quiet
+    fi
+fi
+
 RUN_UNIT=false
 RUN_FEATURE=false
 RUN_FRONTEND=false
