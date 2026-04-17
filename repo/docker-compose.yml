@@ -40,11 +40,25 @@ services:
     volumes:
       - .:/var/www/html
       - app_storage:/var/www/html/storage/app
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/login | grep -q 'Sign in' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 60s
     depends_on:
       db:
         condition: service_healthy
     networks:
-      - medvoyage
+      # Expose the app under an additional DNS name.  The Chromium network
+      # stack auto-upgrades HTTP → HTTPS for hostnames matching the `.app`
+      # HSTS-preload entry (and single-label `app` matches the rule), which
+      # causes every E2E page.goto to fail with ERR_CONNECTION_CLOSED because
+      # the dev server only serves plain HTTP.  The alias `web` is not in any
+      # HSTS preload list, so Chromium reaches the server without upgrading.
+      medvoyage:
+        aliases:
+          - web
 
   # ── PostgreSQL ───────────────────────────────────────────────────────────────
   db:
@@ -67,6 +81,41 @@ services:
     networks:
       - medvoyage
 
+  # ── Playwright E2E ──────────────────────────────────────────────────────────
+  #
+  # Uses the already-pulled repo-playwright:latest image (Playwright 1.59.1 +
+  # Node 20).  The e2e tests are mounted from ./tests/e2e into /app/e2e so that
+  # Node's module resolution can find @playwright/test in /app/node_modules.
+  #
+  # Run with:
+  #   docker compose --profile e2e run --rm playwright
+  #
+  playwright:
+    image: repo-playwright:latest
+    container_name: medvoyage_playwright
+    profiles:
+      - e2e
+    shm_size: '1gb'
+    volumes:
+      - ./tests/e2e:/app/e2e
+      - playwright_cache:/root/.cache/ms-playwright
+    working_dir: /app
+    environment:
+      BASE_URL:            "http://web:8000"
+      E2E_MEMBER_EMAIL:    "member@medvoyage.test"
+      E2E_MEMBER_PASSWORD: "Seed1234!@"
+      E2E_ADMIN_EMAIL:     "admin@medvoyage.test"
+      E2E_ADMIN_PASSWORD:  "Seed1234!@"
+      PLAYWRIGHT_BROWSERS_PATH: "/root/.cache/ms-playwright"
+    command: >
+      sh -c "npx playwright install --with-deps chromium &&
+             npx playwright test --config=/app/e2e/playwright.config.js"
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - medvoyage
+
 networks:
   medvoyage:
     driver: bridge
@@ -74,3 +123,4 @@ networks:
 volumes:
   db_data:
   app_storage:
+  playwright_cache:

@@ -1,116 +1,156 @@
 # MedVoyage
 
-**Provider & Trip Enrollment System** — A fully offline-capable clinician credentialing, group medical trip enrollment, membership management, and billing reconciliation platform.
+A full-stack clinician credentialing, group medical trip enrollment, membership management, and billing reconciliation platform. MedVoyage handles the complete provider journey — from initial credentialing through trip booking, seat management, waitlist processing, and finance settlement — in a single, self-contained application.
 
----
+## Architecture & Tech Stack
 
-## Prerequisites
-
-- [Docker](https://docs.docker.com/get-docker/) + [Docker Compose](https://docs.docker.com/compose/install/)
-
-That's it. No PHP, Node, Composer, or npm needed on your host machine.
-
----
-
-## Quick Start
-
-```bash
-git clone <repo-url> medvoyage
-cd medvoyage
-docker compose up
-```
-
-Visit **http://localhost:8000** once startup completes (~60 s on first boot while assets build and migrations run).
-
----
-
-## Demo Accounts
-
-The following accounts are created automatically on first boot (`docker compose up`):
-
-| Username   | Password     | Role(s)                    |
-|------------|--------------|----------------------------|
-| `admin`    | `Seed1234!@` | Administrator              |
-| `reviewer` | `Seed1234!@` | Credentialing Reviewer     |
-| `finance`  | `Seed1234!@` | Finance Specialist         |
-| `doctor`   | `Seed1234!@` | Doctor + Member            |
-| `member`   | `Seed1234!@` | Member                     |
-
-You can log in with a username **or** email address (e.g. `admin` or `admin@medvoyage.test`).
-
----
-
-## Running Tests
-
-All tests run **inside the Docker container** — no local PHP required.
-
-```bash
-# All tests (unit + feature)
-./run_tests.sh
-make test
-
-# Individual suites
-./run_tests.sh --unit      # Unit tests only
-./run_tests.sh --feature   # Feature tests only
-./run_tests.sh --coverage  # With coverage report (≥80% target)
-
-# Via Make
-make test-unit
-make test-feature
-make coverage
-```
-
----
+* **Frontend:** Livewire 3, Alpine.js, TailwindCSS (compiled via Vite)
+* **Backend:** PHP 8.2, Laravel 11, Laravel Reverb (WebSocket), scheduled queue workers
+* **Database:** PostgreSQL 16
+* **Containerization:** Docker & Docker Compose (required — no local PHP/Node needed)
 
 ## Project Structure
 
-```
-app/
-  Enums/          PHP 8.1 backed enums for every domain entity
-  Events/         Broadcast events (SeatHeld, TripStatusChanged, …)
-  Exceptions/     Custom exceptions (InvalidStatusTransition, StaleRecord)
-  Http/Middleware/ AccountStatus, Credentialing, Finance, Admin, VerifyApiCsrfToken
-  Livewire/       Livewire 3 components grouped by module
-  Models/         Eloquent models (one per file, UUID PKs)
-  Services/       Business logic (TripService, SeatService, AuditService, …)
-  Traits/         HasOptimisticLocking
-config/
-  medvoyage.php   App-specific config (seat hold minutes, waitlist offer minutes)
-database/
-  migrations/     Database schema
-  factories/      Model factories for testing
-  seeders/        Demo data seeders
-public/
-  fonts/          Self-hosted DM Sans, IBM Plex Sans, IBM Plex Mono (zero external requests)
-resources/
-  css/app.css     Tailwind + CSS design system variables
-  js/app.js       Alpine.js + Laravel Echo (Reverb) entry point
-  views/
-    layouts/      app.blade.php (sidebar), guest.blade.php
-    components/   Reusable Blade components
-    livewire/     Livewire view templates
-routes/
-  web.php         All application routes
-  channels.php    Reverb broadcast channel authorisation
-  console.php     Scheduled commands
-tests/
-  Unit/           Isolated logic tests (services, enums, traits)
-  Feature/        HTTP + Livewire integration tests
+```text
+.
+├── app/
+│   ├── Enums/                  # PHP backed enums for every domain entity
+│   ├── Events/                 # Broadcast events (SeatHeld, TripStatusChanged, …)
+│   ├── Exceptions/             # Custom exceptions (InvalidStatusTransition, StaleRecord)
+│   ├── Http/
+│   │   ├── Controllers/Api/    # REST API controllers (one per domain)
+│   │   └── Middleware/         # AccountStatus, Credentialing, Finance, Admin, VerifyApiCsrfToken
+│   ├── Livewire/               # Livewire 3 components grouped by module
+│   ├── Models/                 # Eloquent models (UUID PKs throughout)
+│   ├── Services/               # Business logic (TripService, SeatService, AuditService, …)
+│   └── Traits/                 # HasOptimisticLocking
+├── config/
+│   └── medvoyage.php           # App-specific config (seat hold minutes, waitlist offer TTL)
+├── database/
+│   ├── factories/              # Model factories for testing
+│   ├── migrations/             # Database schema
+│   └── seeders/                # Demo data seeders
+├── resources/
+│   ├── css/app.css             # Tailwind + design system CSS variables
+│   ├── js/app.js               # Alpine.js + Laravel Echo (Reverb) entry point
+│   └── views/                  # Blade layouts, components, and Livewire templates
+├── routes/
+│   ├── api.php                 # REST API routes (/api/*)
+│   ├── web.php                 # Web/Livewire routes
+│   └── channels.php            # Reverb broadcast channel authorisation
+├── tests/
+│   ├── Feature/Api/            # HTTP API integration tests (Pest)
+│   ├── Feature/Auth/           # Authentication flow tests
+│   ├── Feature/Credentialing/  # Credentialing service and Livewire tests
+│   ├── Feature/Trips/          # Trip and signup workflow tests
+│   ├── Feature/Workflows/      # Cross-domain workflow tests
+│   ├── Unit/                   # Isolated service, enum, and trait tests
+│   └── e2e/                    # Playwright browser tests
+│       ├── playwright.config.js
+│       └── specs/              # auth, booking, review-admin specs
+├── .env.example                # Example environment variables
+├── docker-compose.yml          # Multi-container orchestration
+├── Dockerfile                  # App image (PHP + Node for asset builds)
+├── entrypoint.sh               # Container startup (migrations, seeds, queue worker)
+├── run_tests.sh                # Standardized test execution script
+└── Makefile                    # Convenience aliases for common commands
 ```
 
----
+## Prerequisites
+
+This project runs entirely inside containers. You only need:
+
+* [Docker](https://docs.docker.com/get-docker/)
+* [Docker Compose](https://docs.docker.com/compose/install/)
+
+No PHP, Node, Composer, or npm installation is required on the host machine.
+
+## Running the Application
+
+1. **Copy the example environment file:**
+   ```bash
+   cp .env.example .env
+   ```
+   The entrypoint handles key generation automatically, but copying `.env` first avoids any timing edge-cases on first boot.
+
+2. **Build and start all containers:**
+   ```bash
+   docker compose up --build
+   ```
+   On first boot the container installs dependencies, builds frontend assets, runs migrations, and seeds demo data (~60 s). Subsequent starts are much faster.
+
+3. **Access the app:**
+   * Application: `http://localhost:8000`
+   * WebSocket (Reverb): `ws://localhost:8080`
+
+4. **Stop the application:**
+   ```bash
+   docker compose down -v
+   ```
+
+## Testing
+
+All tests — unit, feature/API, and browser E2E — are executed through a single script. No local PHP or Node runtime is required.
+
+```bash
+chmod +x run_tests.sh
+./run_tests.sh
+```
+
+Running with no flags executes **all three suites** (unit + feature + E2E) in order. The script exits `0` on success and non-zero on any failure, making it CI/CD compatible.
+
+**Selective suites:**
+
+```bash
+./run_tests.sh --unit              # Unit tests only
+./run_tests.sh --feature           # Feature/API integration tests only
+./run_tests.sh --e2e               # Browser E2E tests only
+./run_tests.sh --unit --feature    # PHP tests without E2E
+./run_tests.sh --coverage          # Add coverage report to whichever PHP suites run
+./run_tests.sh --all               # Explicit equivalent of no flags
+```
+
+**Via Make:**
+
+```bash
+make test           # Unit + Feature + E2E  (default)
+make test-unit      # Unit tests only
+make test-feature   # Feature tests only
+make test-e2e       # E2E only
+make coverage       # Unit + Feature with coverage report
+```
+
+**How the script works:**
+
+* **PHP tests** run inside the `app` Docker container. The script detects whether it is already inside a container and adapts accordingly — no manual `docker exec` needed.
+* **E2E tests** use the `repo-playwright:latest` image (already pulled — no network download). When E2E is included, the script automatically starts the full application stack (`docker compose up -d`), waits up to 120 s for the app healthcheck to pass, then runs Playwright via `docker compose --profile e2e run --rm playwright`. Chromium is installed on first run and cached in a named Docker volume (`playwright_cache`) for subsequent runs.
+* The three Playwright spec suites cover `auth`, `booking` (including a full hold-to-payment journey), and `review-admin` (admin pages and membership flows).
+
+## Seeded Credentials
+
+The database is pre-seeded automatically on first boot. The login form accepts both username and email address.
+
+| Role | Email | Password | Notes |
+| :--- | :--- | :--- | :--- |
+| **Admin** | `admin@medvoyage.test` | `Seed1234!@` | Full access to all modules: user management, trip administration, and review moderation. |
+| **Credentialing Reviewer** | `reviewer@medvoyage.test` | `Seed1234!@` | Can assign, approve, reject, and request materials for credentialing cases. |
+| **Finance Specialist** | `finance@medvoyage.test` | `Seed1234!@` | Can record payments, manage invoices, and close settlement periods. |
+| **Doctor + Member** | `doctor@medvoyage.test` | `Seed1234!@` | Pre-credentialed doctor who can also enroll in trips as a member. |
+| **Member** | `member@medvoyage.test` | `Seed1234!@` | Standard member — can search trips, hold seats, join waitlists, and manage membership. |
 
 ## Useful Commands
 
 ```bash
-make shell       # Open a bash shell inside the app container
-make tinker      # Open Laravel Tinker REPL
-make migrate     # Run pending migrations
-make fresh       # Drop and re-migrate + re-seed (destroys data)
-make down        # Stop all containers
-make test        # Run full test suite (unit + feature)
-make test-unit   # Unit tests only
-make test-feature# Feature tests only
-make coverage    # With HTML coverage report
-make docs-check  # Verify command names and middleware list match source
+make shell          # Open a bash shell inside the running app container
+make tinker         # Open Laravel Tinker REPL
+make migrate        # Run pending migrations
+make seed           # Re-run seeders (demo data)
+make fresh          # Drop all tables, re-migrate, and re-seed (destroys data)
+make down           # Stop and remove all containers
+make test           # Run unit + feature + E2E tests
+make test-unit      # Unit tests only
+make test-feature   # Feature tests only
+make test-e2e       # Browser E2E tests only
+make coverage       # Unit + Feature with HTML coverage report
+make docs-check     # Verify artisan command names and middleware list match source
 ```

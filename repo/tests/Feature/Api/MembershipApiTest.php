@@ -47,7 +47,10 @@ it('POST /api/membership/plans/{plan}/purchase creates an order for a member wit
         ->postJson("/api/membership/plans/{$plan->id}/purchase", [
             'idempotency_key' => (string) Str::uuid(),
         ])
-        ->assertCreated();
+        ->assertCreated()
+        ->assertJsonPath('status', 'PENDING')
+        ->assertJsonPath('plan_id', $plan->id)
+        ->assertJsonPath('order_type', 'PURCHASE');
 });
 
 it('POST /api/membership/plans/{plan}/purchase is idempotent on same key', function () {
@@ -104,7 +107,10 @@ it('POST /api/membership/plans/{plan}/top-up succeeds when member has active mem
         ->postJson("/api/membership/plans/{$plan->id}/top-up", [
             'idempotency_key' => (string) Str::uuid(),
         ])
-        ->assertCreated();
+        ->assertCreated()
+        ->assertJsonPath('status', 'PENDING')
+        ->assertJsonPath('plan_id', $plan->id)
+        ->assertJsonPath('order_type', 'TOP_UP');
 });
 
 it('POST /api/membership/plans/{plan}/top-up returns 422 when member has no active membership', function () {
@@ -129,7 +135,9 @@ it('POST /api/membership/orders/{order}/refund allows member to request a FULL r
             'refund_type' => RefundType::FULL->value,
             'reason'      => 'I would like to cancel my membership subscription.',
         ])
-        ->assertCreated();
+        ->assertCreated()
+        ->assertJsonPath('status', 'PENDING')
+        ->assertJsonPath('refund_type', RefundType::FULL->value);
 });
 
 it('POST /api/membership/orders/{order}/refund allows member to request a PARTIAL refund with amount_cents', function () {
@@ -142,7 +150,10 @@ it('POST /api/membership/orders/{order}/refund allows member to request a PARTIA
             'reason'       => 'I only used part of my membership period.',
             'amount_cents' => 2500,
         ])
-        ->assertCreated();
+        ->assertCreated()
+        ->assertJsonPath('status', 'PENDING')
+        ->assertJsonPath('refund_type', RefundType::PARTIAL->value)
+        ->assertJsonPath('amount_cents', 2500);
 });
 
 it('POST /api/membership/orders/{order}/refund returns 403 when caller does not own the order', function () {

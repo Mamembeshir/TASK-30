@@ -1,4 +1,4 @@
-.PHONY: setup serve down migrate seed test test-unit test-feature coverage shell tinker fresh docs-check
+.PHONY: setup serve down migrate seed test test-unit test-feature test-e2e coverage shell tinker fresh docs-check
 
 # Build and start (detached)
 setup:
@@ -20,21 +20,23 @@ seed:
 fresh:
 	docker compose exec app php artisan migrate:fresh --seed
 
-# Run all tests (unit + feature) inside the app container
+# Run all tests: unit + feature + e2e (Playwright)
 test:
-	docker compose exec app bash run_tests.sh
+	./run_tests.sh
 
+# PHP-only suites (no e2e, no full stack startup required)
 test-unit:
-	docker compose exec app bash run_tests.sh --unit
+	./run_tests.sh --unit
 
 test-feature:
-	docker compose exec app bash run_tests.sh --feature
+	./run_tests.sh --feature
 
-test-frontend:
-	docker compose exec app bash run_tests.sh --frontend
+# Browser E2E only (starts full stack automatically if not already up)
+test-e2e:
+	./run_tests.sh --e2e
 
 coverage:
-	docker compose exec app bash run_tests.sh --coverage
+	./run_tests.sh --unit --feature --coverage
 
 shell:
 	docker compose exec app bash

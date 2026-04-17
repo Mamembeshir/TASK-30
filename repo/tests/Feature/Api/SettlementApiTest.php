@@ -199,8 +199,14 @@ it('GET /api/settlements/{settlement}/statement returns file download', function
     $finance    = settlementFinanceUser();
     $settlement = Settlement::factory()->reconciled()->create();
 
-    $this->actingAs($finance)
+    $response = $this->actingAs($finance)
         ->getJson("/api/settlements/{$settlement->id}/statement")
         ->assertOk()
-        ->assertHeader('Content-Disposition');
+        ->assertHeader('Content-Disposition')
+        ->assertHeader('Content-Type');
+
+    // Content-Disposition must signal an attachment with a filename
+    expect($response->headers->get('Content-Disposition'))
+        ->toContain('attachment')
+        ->toContain('filename');
 });

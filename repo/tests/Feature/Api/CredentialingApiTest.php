@@ -242,3 +242,239 @@ it('POST /api/credentialing/cases/{case}/request-materials returns 403 for plain
         ])
         ->assertForbidden();
 });
+
+// ── POST /api/credentialing/doctors/{doctor}/upload-document ──────────────────
+
+it('POST /api/credentialing/doctors/{doctor}/upload-document allows doctor to upload their own document (201)', function () {
+    $doctor = \App\Models\Doctor::factory()->create();
+    $user   = $doctor->user;
+
+    $this->actingAs($user)
+        ->postJson("/api/credentialing/doctors/{$doctor->id}/upload-document", [
+            'document_type' => DocumentType::LICENSE->value,
+            'file'          => \Illuminate\Http\UploadedFile::fake()->create('license.pdf', 512, 'application/pdf'),
+        ])
+        ->assertCreated()
+        ->assertJsonPath('document_type', DocumentType::LICENSE->value);
+});
+
+it('POST /api/credentialing/doctors/{doctor}/upload-document returns 403 when caller is not the doctor', function () {
+    $doctor    = \App\Models\Doctor::factory()->create();
+    $otherUser = User::factory()->create();
+    UserProfile::create(['user_id' => $otherUser->id, 'first_name' => 'Other', 'last_name' => 'User']);
+    $otherUser->addRole(UserRole::MEMBER);
+
+    $this->actingAs($otherUser->fresh())
+        ->postJson("/api/credentialing/doctors/{$doctor->id}/upload-document", [
+            'document_type' => DocumentType::LICENSE->value,
+            'file'          => \Illuminate\Http\UploadedFile::fake()->create('license.pdf', 512, 'application/pdf'),
+        ])
+        ->assertForbidden();
+});
+
+it('POST /api/credentialing/doctors/{doctor}/upload-document returns 422 when file is missing', function () {
+    $doctor = \App\Models\Doctor::factory()->create();
+    $user   = $doctor->user;
+
+    $this->actingAs($user)
+        ->postJson("/api/credentialing/doctors/{$doctor->id}/upload-document", [
+            'document_type' => DocumentType::LICENSE->value,
+            // no 'file' key
+        ])
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('file');
+});
+
+it('POST /api/credentialing/doctors/{doctor}/upload-document returns 422 when document_type is missing', function () {
+    $doctor = \App\Models\Doctor::factory()->create();
+    $user   = $doctor->user;
+
+    $this->actingAs($user)
+        ->postJson("/api/credentialing/doctors/{$doctor->id}/upload-document", [
+            'file' => \Illuminate\Http\UploadedFile::fake()->create('license.pdf', 512, 'application/pdf'),
+            // no 'document_type' key
+        ])
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('document_type');
+});
+
+// ── POST /api/credentialing/doctors/{doctor}/submit-case ──────────────────────
+
+it('POST /api/credentialing/doctors/{doctor}/submit-case creates a SUBMITTED case (201)', function () {
+    $doctor = \App\Models\Doctor::factory()->create();
+    $user   = $doctor->user;
+
+    // Doctor needs the two required document types before submitting
+    DoctorDocument::factory()->create(['doctor_id' => $doctor->id, 'document_type' => DocumentType::LICENSE]);
+    DoctorDocument::factory()->create(['doctor_id' => $doctor->id, 'document_type' => DocumentType::BOARD_CERTIFICATION]);
+
+    $this->actingAs($user)
+        ->postJson("/api/credentialing/doctors/{$doctor->id}/submit-case")
+        ->assertCreated()
+        ->assertJsonPath('status', CaseStatus::SUBMITTED->value);
+});
+
+it('POST /api/credentialing/doctors/{doctor}/submit-case is idempotent on the same key', function () {
+    $doctor = \App\Models\Doctor::factory()->create();
+    $user   = $doctor->user;
+    DoctorDocument::factory()->create(['doctor_id' => $doctor->id, 'document_type' => DocumentType::LICENSE]);
+    DoctorDocument::factory()->create(['doctor_id' => $doctor->id, 'document_type' => DocumentType::BOARD_CERTIFICATION]);
+    $key = (string) \Illuminate\Support\Str::uuid();
+
+    $r1 = $this->actingAs($user)
+        ->postJson("/api/credentialing/doctors/{$doctor->id}/submit-case", ['idempotency_key' => $key])
+        ->assertCreated();
+
+    $r2 = $this->actingAs($user)
+        ->postJson("/api/credentialing/doctors/{$doctor->id}/submit-case", ['idempotency_key' => $key])
+        ->assertCreated();
+
+    expect($r1->json('id'))->toBe($r2->json('id'));
+});
+
+it('POST /api/credentialing/doctors/{doctor}/submit-case returns 403 when caller is not the doctor', function () {
+    $doctor    = \App\Models\Doctor::factory()->create();
+    $otherUser = User::factory()->create();
+    UserProfile::create(['user_id' => $otherUser->id, 'first_name' => 'Other', 'last_name' => 'User']);
+    $otherUser->addRole(UserRole::MEMBER);
+
+    $this->actingAs($otherUser->fresh())
+        ->postJson("/api/credentialing/doctors/{$doctor->id}/submit-case")
+        ->assertForbidden();
+});
+
+it('POST /api/credentialing/doctors/{doctor}/submit-case returns 422 when required documents are missing', function () {
+    $doctor = \App\Models\Doctor::factory()->create();
+    $user   = $doctor->user;
+    // No documents uploaded — missing LICENSE + BOARD_CERTIFICATION
+
+    $this->actingAs($user)
+        ->postJson("/api/credentialing/doctors/{$doctor->id}/submit-case")
+        ->assertStatus(422);
+});
+
+// ── POST /api/credentialing/doctors/{doctor}/resubmit-case ───────────────────
+
+it('POST /api/credentialing/doctors/{doctor}/resubmit-case transitions case to RE_REVIEW (200)', function () {
+    $reviewer = apiReviewer();
+    $doctor   = \App\Models\Doctor::factory()->create();
+    $user     = $doctor->user;
+
+    $case = CredentialingCase::factory()->moreMaterialsRequested()->create([
+        'doctor_id'         => $doctor->id,
+        'assigned_reviewer' => $reviewer->id,
+    ]);
+
+    $this->actingAs($user)
+        ->postJson("/api/credentialing/doctors/{$doctor->id}/resubmit-case")
+        ->assertOk()
+        ->assertJsonPath('status', CaseStatus::RE_REVIEW->value);
+});
+
+it('POST /api/credentialing/doctors/{doctor}/resubmit-case returns 403 when caller is not the doctor', function () {
+    $reviewer  = apiReviewer();
+    $doctor    = \App\Models\Doctor::factory()->create();
+    $otherUser = User::factory()->create();
+    UserProfile::create(['user_id' => $otherUser->id, 'first_name' => 'Other', 'last_name' => 'User']);
+    $otherUser->addRole(UserRole::MEMBER);
+
+    CredentialingCase::factory()->moreMaterialsRequested()->create([
+        'doctor_id'         => $doctor->id,
+        'assigned_reviewer' => $reviewer->id,
+    ]);
+
+    $this->actingAs($otherUser->fresh())
+        ->postJson("/api/credentialing/doctors/{$doctor->id}/resubmit-case")
+        ->assertForbidden();
+});
+
+it('POST /api/credentialing/doctors/{doctor}/resubmit-case returns 422 when no active case exists', function () {
+    $doctor = \App\Models\Doctor::factory()->create();
+    $user   = $doctor->user;
+    // No case created for this doctor
+
+    $this->actingAs($user)
+        ->postJson("/api/credentialing/doctors/{$doctor->id}/resubmit-case")
+        ->assertStatus(422);
+});
+
+it('POST /api/credentialing/doctors/{doctor}/resubmit-case returns 422 when active case is not in MORE_MATERIALS_REQUESTED state', function () {
+    $reviewer = apiReviewer();
+    $doctor   = \App\Models\Doctor::factory()->create();
+    $user     = $doctor->user;
+
+    // Case is in INITIAL_REVIEW — cannot resubmit from here
+    CredentialingCase::factory()->inReview()->create([
+        'doctor_id'         => $doctor->id,
+        'assigned_reviewer' => $reviewer->id,
+    ]);
+
+    $this->actingAs($user)
+        ->postJson("/api/credentialing/doctors/{$doctor->id}/resubmit-case")
+        ->assertStatus(422);
+});
+
+// ── POST /api/credentialing/cases/{case}/upload-document ─────────────────────
+
+it('POST /api/credentialing/cases/{case}/upload-document allows assigned reviewer to upload a document (201)', function () {
+    $reviewer = apiReviewer();
+    $case     = CredentialingCase::factory()->inReview()->create([
+        'assigned_reviewer' => $reviewer->id,
+    ]);
+
+    $this->actingAs($reviewer)
+        ->postJson("/api/credentialing/cases/{$case->id}/upload-document", [
+            'document_type' => DocumentType::BOARD_CERTIFICATION->value,
+            'file'          => \Illuminate\Http\UploadedFile::fake()->create('board_cert.pdf', 1024, 'application/pdf'),
+        ])
+        ->assertCreated()
+        ->assertJsonPath('document_type', DocumentType::BOARD_CERTIFICATION->value);
+});
+
+it('POST /api/credentialing/cases/{case}/upload-document returns 403 when caller is not assigned to the doctor', function () {
+    $assigned   = apiReviewer();
+    $unassigned = apiReviewer();
+    $case       = CredentialingCase::factory()->inReview()->create([
+        'assigned_reviewer' => $assigned->id,
+    ]);
+
+    $this->actingAs($unassigned)
+        ->postJson("/api/credentialing/cases/{$case->id}/upload-document", [
+            'document_type' => DocumentType::LICENSE->value,
+            'file'          => \Illuminate\Http\UploadedFile::fake()->create('license.pdf', 512, 'application/pdf'),
+        ])
+        ->assertForbidden();
+});
+
+it('POST /api/credentialing/cases/{case}/upload-document returns 422 when file is missing', function () {
+    $reviewer = apiReviewer();
+    $case     = CredentialingCase::factory()->inReview()->create([
+        'assigned_reviewer' => $reviewer->id,
+    ]);
+
+    $this->actingAs($reviewer)
+        ->postJson("/api/credentialing/cases/{$case->id}/upload-document", [
+            'document_type' => DocumentType::LICENSE->value,
+            // no 'file' key
+        ])
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('file');
+});
+
+it('POST /api/credentialing/cases/{case}/upload-document returns 403 for plain member', function () {
+    $member = User::factory()->create();
+    UserProfile::create(['user_id' => $member->id, 'first_name' => 'Plain', 'last_name' => 'Member']);
+    $member->addRole(UserRole::MEMBER);
+
+    $reviewer = apiReviewer();
+    $case     = CredentialingCase::factory()->inReview()->create([
+        'assigned_reviewer' => $reviewer->id,
+    ]);
+
+    $this->actingAs($member->fresh())
+        ->postJson("/api/credentialing/cases/{$case->id}/upload-document", [
+            'document_type' => DocumentType::LICENSE->value,
+            'file'          => \Illuminate\Http\UploadedFile::fake()->create('license.pdf', 512, 'application/pdf'),
+        ])
+        ->assertForbidden();
+});
