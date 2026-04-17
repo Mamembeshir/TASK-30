@@ -1,6 +1,8 @@
 # MedVoyage
 
-A full-stack clinician credentialing, group medical trip enrollment, membership management, and billing reconciliation platform. MedVoyage handles the complete provider journey — from initial credentialing through trip booking, seat management, waitlist processing, and finance settlement — in a single, self-contained application.
+**Project type:** fullstack
+
+A fullstack clinician credentialing, group medical trip enrollment, membership management, and billing reconciliation platform. MedVoyage handles the complete provider journey — from initial credentialing through trip booking, seat management, waitlist processing, and finance settlement — in a single, self-contained application.
 
 ## Architecture & Tech Stack
 
@@ -75,9 +77,13 @@ No PHP, Node, Composer, or npm installation is required on the host machine.
 
 2. **Build and start all containers:**
    ```bash
-   docker compose up --build
+   docker-compose up --build
    ```
-   On first boot the container installs dependencies, builds frontend assets, runs migrations, and seeds demo data (~60 s). Subsequent starts are much faster.
+   (On Docker Compose v2 the equivalent command is `docker compose up --build`; both
+   are supported — use whichever your Docker installation provides.)
+
+   On first boot the container installs dependencies, builds frontend assets, runs
+   migrations, and seeds demo data (~60 s). Subsequent starts are much faster.
 
 3. **Access the app:**
    * Application: `http://localhost:8000`
@@ -85,8 +91,49 @@ No PHP, Node, Composer, or npm installation is required on the host machine.
 
 4. **Stop the application:**
    ```bash
-   docker compose down -v
+   docker-compose down -v
    ```
+
+## Verifying the Application
+
+After `docker-compose up` completes the first-boot sequence, use the following
+checks to confirm the system is running correctly. All three must pass.
+
+### 1. Container health
+
+```bash
+docker compose ps
+```
+
+Expected: two services reported `(healthy)` — `medvoyage_app` and `medvoyage_db`.
+
+### 2. HTTP smoke test
+
+```bash
+curl -sI http://localhost:8000/login
+```
+
+Expected: `HTTP/1.1 200 OK` with a `Set-Cookie: XSRF-TOKEN=...` header in the
+response.
+
+```bash
+curl -s http://localhost:8000/login | grep -o 'Sign in'
+```
+
+Expected output: `Sign in` (the login form has rendered).
+
+### 3. UI smoke flow
+
+1. Open `http://localhost:8000` in a browser — you should be redirected to
+   `/login`.
+2. Sign in with `member@medvoyage.test` / `Seed1234!@` (see
+   [Seeded Credentials](#seeded-credentials) below).
+3. Expected: the browser lands on `/dashboard` and the MedVoyage top bar is
+   visible. Submitting the logout form (via the account menu) must return you
+   to `/login`.
+
+If any of the three checks fails, see [Troubleshooting](#troubleshooting)
+below.
 
 ## Testing
 
@@ -154,3 +201,14 @@ make test-e2e       # Browser E2E tests only
 make coverage       # Unit + Feature with HTML coverage report
 make docs-check     # Verify artisan command names and middleware list match source
 ```
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+| :--- | :--- | :--- |
+| `medvoyage_db` reports `unhealthy` and logs `chown: /var/lib/postgresql/data/mysql.sock: No such file or directory` | Stale `db_data` volume left over from a previous project using MySQL | `docker-compose down -v` to wipe the volume, then `docker-compose up --build` |
+| `medvoyage_app` never reaches `healthy` — `curl http://localhost:8000/login` returns empty/connection refused | First-boot steps still running (composer install, `npm run build`, migrations, seeders) | Watch `docker compose logs -f app`; the app is ready when you see `Starting development server: http://0.0.0.0:8000`. First boot can take ~60 s. |
+| Port `8000` or `5432` already in use | Another process is bound to those ports on the host | Stop the conflicting service, or export `APP_PORT=8001` / `DB_PORT=5433` before `docker-compose up` |
+| Playwright E2E tests fail with `net::ERR_CONNECTION_CLOSED` | Chromium auto-upgrades `http://app:*` to HTTPS because of an HSTS-preload rule on the `.app` TLD | Already worked around — the app container is reachable from the Playwright network under the alias `web`, and `BASE_URL` in `docker-compose.yml` points at `http://web:8000` for that reason. Do not rename the alias. |
+| API tests return `419 CSRF token mismatch` | Request sent without the `Origin` header matching `APP_URL` | Send JSON requests with `Origin: http://localhost:8000` (the custom `VerifyApiCsrfToken` middleware exempts same-origin JSON) or include an `X-CSRF-TOKEN` header |
+| `docker compose exec app …` fails with `service "app" is not running` | The stack was started with `docker-compose down` (or the container crashed) | Re-run `docker-compose up -d` and wait for the `app` healthcheck to pass |
