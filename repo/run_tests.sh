@@ -98,7 +98,14 @@ if [ ! -f /var/www/html/vendor/autoload.php ]; then
     if [ "$RUN_E2E" = true ]; then
         echo ""
         echo "--- E2E / Browser Tests (Playwright) ---"
-        # repo-playwright:latest is already pulled locally — no new image pull.
+        # `repo-playwright:latest` is baked on the developer machine but does
+        # not exist in a clean environment (CI).  Build it on demand from
+        # tests/e2e/Dockerfile when missing so `docker compose run` does not
+        # try to pull the tag from a public registry.
+        if ! docker image inspect repo-playwright:latest >/dev/null 2>&1; then
+            echo "repo-playwright:latest not present — building from tests/e2e/Dockerfile..."
+            docker compose --profile e2e build playwright
+        fi
         docker compose --profile e2e run --rm playwright
         E2E_EXIT=$?
         [ $E2E_EXIT -ne 0 ] && EXIT_CODE=$E2E_EXIT

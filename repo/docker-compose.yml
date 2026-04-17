@@ -91,7 +91,12 @@ services:
   #   docker compose --profile e2e run --rm playwright
   #
   playwright:
+    # Local runs reuse the pre-built `repo-playwright:latest` tag; CI (and any
+    # clean environment) builds it from tests/e2e/Dockerfile on demand.
     image: repo-playwright:latest
+    build:
+      context: .
+      dockerfile: tests/e2e/Dockerfile
     container_name: medvoyage_playwright
     profiles:
       - e2e
