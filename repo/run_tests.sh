@@ -23,31 +23,23 @@ RUN_FEATURE=false
 RUN_E2E=false
 COVERAGE=false
 
-# TEMP: focus the whole script on the E2E suite while we debug the login flow.
-# Unit + Feature runs are commented out; ./run_tests.sh (no flags) now runs
-# only E2E.  Restore the block below once the E2E suite is green.
-RUN_UNIT=false
-RUN_FEATURE=false
-RUN_E2E=true
-COVERAGE=false
+if [ $# -eq 0 ]; then
+    # Default: run everything
+    RUN_UNIT=true
+    RUN_FEATURE=true
+    RUN_E2E=true
+fi
 
-# if [ $# -eq 0 ]; then
-#     # Default: run everything
-#     RUN_UNIT=true
-#     RUN_FEATURE=true
-#     RUN_E2E=true
-# fi
-#
-# for arg in "$@"; do
-#     case $arg in
-#         --unit)     RUN_UNIT=true ;;
-#         --feature)  RUN_FEATURE=true ;;
-#         --e2e)      RUN_E2E=true ;;
-#         --browser)  RUN_E2E=true ;;
-#         --coverage) COVERAGE=true ;;
-#         --all)      RUN_UNIT=true; RUN_FEATURE=true; RUN_E2E=true ;;
-#     esac
-# done
+for arg in "$@"; do
+    case $arg in
+        --unit)     RUN_UNIT=true ;;
+        --feature)  RUN_FEATURE=true ;;
+        --e2e)      RUN_E2E=true ;;
+        --browser)  RUN_E2E=true ;;
+        --coverage) COVERAGE=true ;;
+        --all)      RUN_UNIT=true; RUN_FEATURE=true; RUN_E2E=true ;;
+    esac
+done
 
 # ── HOST SIDE: orchestrate containers ─────────────────────────────────────────
 # /var/www/html/vendor/autoload.php only exists inside the built image.
@@ -90,7 +82,24 @@ if [ ! -f /var/www/html/vendor/autoload.php ]; then
         docker compose up -d db
     fi
 
-    # ── PHP tests (unit and/or feature) ──────────────────────────────────────
+    # ── E2E tests FIRST ───────────────────────────────────────────────────
+    # We run the browser suite before the PHP suites so it sees a freshly
+    # recreated app container with guaranteed-seeded demo accounts (the
+    # entrypoint + `medvoyage:ensure-test-users` step ran just above).
+    # Running PHP tests first risks migrating/seeding the main DB in ways
+    # that interfere with the browser flow.
+    if [ "$RUN_E2E" = true ]; then
+        echo ""
+        echo "--- E2E / Browser Tests (Playwright) ---"
+        # Uses the public mcr.microsoft.com/playwright:v1.59.1-noble image
+        # (see docker-compose.yml).  Docker will pull it on the first run in
+        # a clean environment (CI) and reuse the cached copy thereafter.
+        docker compose --profile e2e run --rm playwright
+        E2E_EXIT=$?
+        [ $E2E_EXIT -ne 0 ] && EXIT_CODE=$E2E_EXIT
+    fi
+
+    # ── PHP tests (unit and/or feature) — run AFTER e2e ──────────────────────
     # Build the flag list to pass into the container (e2e is host-only).
     PHP_FLAGS=()
     $RUN_UNIT    && PHP_FLAGS+=(--unit)
@@ -110,18 +119,6 @@ if [ ! -f /var/www/html/vendor/autoload.php ]; then
         fi
         PHP_EXIT=$?
         [ $PHP_EXIT -ne 0 ] && EXIT_CODE=$PHP_EXIT
-    fi
-
-    # ── E2E tests ─────────────────────────────────────────────────────────────
-    if [ "$RUN_E2E" = true ]; then
-        echo ""
-        echo "--- E2E / Browser Tests (Playwright) ---"
-        # Uses the public mcr.microsoft.com/playwright:v1.59.1-noble image
-        # (see docker-compose.yml).  Docker will pull it on the first run in
-        # a clean environment (CI) and reuse the cached copy thereafter.
-        docker compose --profile e2e run --rm playwright
-        E2E_EXIT=$?
-        [ $E2E_EXIT -ne 0 ] && EXIT_CODE=$E2E_EXIT
     fi
 
     rm -rf storage/framework/testing 2>/dev/null || true
