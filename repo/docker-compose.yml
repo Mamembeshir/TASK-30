@@ -83,9 +83,11 @@ services:
 
   # ── Playwright E2E ──────────────────────────────────────────────────────────
   #
-  # Uses the already-pulled repo-playwright:latest image (Playwright 1.59.1 +
-  # Node 20).  The e2e tests are mounted from ./tests/e2e into /app/e2e so that
-  # Node's module resolution can find @playwright/test in /app/node_modules.
+  # Uses the public Microsoft Playwright image (Playwright 1.59.1 + Node 20 +
+  # Chromium pre-installed).  The `@playwright/test` runner is not shipped
+  # with the base image, so the container runs `npm install` on first start
+  # from tests/e2e/package.json; node_modules is kept in a named volume so
+  # subsequent runs skip the install.
   #
   # Run with:
   #   docker compose --profile e2e run --rm playwright
@@ -100,19 +102,24 @@ services:
     profiles:
       - e2e
     shm_size: '1gb'
-    # Mount the specs next to the image's pre-installed @playwright/test
-    # (which lives under /home/pwuser/app/node_modules) so Node's upward
-    # module-resolution finds it without a local npm install.
+    # The MS Playwright image ships the `playwright` package + browsers but
+    # not `@playwright/test` (the test runner).  Install it on demand from
+    # tests/e2e/package.json — node_modules persists in a named volume so
+    # subsequent runs skip the download.
+    user: root
     volumes:
-      - ./tests/e2e:/home/pwuser/app/e2e
-    working_dir: /home/pwuser/app
+      - ./tests/e2e:/e2e
+      - e2e_node_modules:/e2e/node_modules
+    working_dir: /e2e
     environment:
       BASE_URL:            "http://web:8000"
       E2E_MEMBER_EMAIL:    "member@medvoyage.test"
       E2E_MEMBER_PASSWORD: "Seed1234!@"
       E2E_ADMIN_EMAIL:     "admin@medvoyage.test"
       E2E_ADMIN_PASSWORD:  "Seed1234!@"
-    command: npx playwright test --config=/home/pwuser/app/e2e/playwright.config.js
+    command: >
+      sh -c "[ -d node_modules/@playwright/test ] || npm install --silent --no-audit --no-fund;
+             npx playwright test --config=./playwright.config.js"
     depends_on:
       app:
         condition: service_healthy
@@ -126,3 +133,4 @@ networks:
 volumes:
   db_data:
   app_storage:
+  e2e_node_modules:
