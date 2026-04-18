@@ -68,25 +68,43 @@ if [ ! -f /var/www/html/vendor/autoload.php ]; then
         done
         echo "App is healthy."
 
-        # ── Make sure the demo users are present ────────────────────────────
-        # The entrypoint's `tinker | tail -1` user-count check can silently
-        # skip seeding when tinker emits a banner or warning.  Query the DB
-        # directly (unambiguous integer from psql) and run db:seed only when
-        # the demo users really are missing — preserves any data already in
-        # the DB.  Also clears AUTH-02 lockout counters so prior failed test
-        # attempts don't leave the seeded accounts temporarily blocked.
+        # ── Ensure the demo users are present, unlocked, and have the
+        #    known test password ────────────────────────────────────────────
+        # Seed when the member user is missing (preserves any data that may
+        # already be in the DB), then explicitly reset password +
+        # lockout counters for every seeded account.  Going through the User
+        # model + Hash::make() (rather than trusting whatever the seeder
+        # produced) means the test password works regardless of DB drift
+        # between runs or past experiments.
+        echo "Ensuring seeded demo users are usable for E2E tests..."
         USER_COUNT=$(docker compose exec -T db \
             psql -U "${DB_USERNAME:-medvoyage}" -d "${DB_DATABASE:-medvoyage}" \
                  -tAc "SELECT count(*) FROM users WHERE email='member@medvoyage.test'" \
             2>/dev/null | tr -cd '0-9')
+        echo "  seeded member-user count: [$USER_COUNT]"
         if [ "$USER_COUNT" != "1" ]; then
-            echo "Demo users missing — running php artisan db:seed --force..."
+            echo "  demo users missing — running php artisan db:seed --force..."
             docker compose exec -T app php artisan db:seed --force
         fi
-        docker compose exec -T db \
-            psql -U "${DB_USERNAME:-medvoyage}" -d "${DB_DATABASE:-medvoyage}" \
-                 -c "UPDATE users SET failed_login_count = 0, locked_until = NULL" \
-            >/dev/null 2>&1 || true
+        echo "  resetting test-account passwords and lockout counters..."
+        docker compose exec -T app php artisan tinker --no-interaction --execute='
+            foreach ([
+                "admin@medvoyage.test",
+                "reviewer@medvoyage.test",
+                "finance@medvoyage.test",
+                "doctor@medvoyage.test",
+                "member@medvoyage.test",
+            ] as $email) {
+                $u = \App\Models\User::where("email", $email)->first();
+                if (!$u) { echo "  MISSING: {$email}\n"; continue; }
+                $u->forceFill([
+                    "password"            => \Hash::make("Seed1234!@"),
+                    "failed_login_count"  => 0,
+                    "locked_until"        => null,
+                ])->save();
+                echo "  OK: {$email}\n";
+            }
+        ' 2>&1 | grep -E 'MISSING|OK' || true
     else
         docker compose build --quiet
         docker compose up -d db
