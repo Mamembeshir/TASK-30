@@ -3,7 +3,11 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './specs',
   globalSetup: './globalSetup.js',
-  timeout: 30_000,
+  timeout: 60_000,
+  // Per-assertion timeout.  Defaults to 5 s which is too aggressive for a
+  // cold CI environment where the first Livewire request can take several
+  // seconds (opcache warm-up, DB session writes, first route cache, etc.).
+  expect: { timeout: 15_000 },
   retries: 1,
 
   // php artisan serve is single-threaded — parallel workers cause connections
@@ -18,7 +22,8 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
     ignoreHTTPSErrors: true,
-    navigationTimeout: 15_000,
+    navigationTimeout: 30_000,
+    actionTimeout: 15_000,
 
     // Standard flags for running Chromium inside a Docker container:
     //   --no-sandbox / --disable-setuid-sandbox → the renderer sandbox cannot

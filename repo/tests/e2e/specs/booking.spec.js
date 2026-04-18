@@ -18,7 +18,17 @@ async function loginAs(page, email, password) {
   await page.getByLabel('Email or username').fill(email);
   await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: /sign in/i }).click();
-  await page.waitForURL(/\/dashboard/);
+  try {
+    await page.waitForURL(/\/dashboard/, { timeout: 30_000 });
+  } catch (e) {
+    const url    = page.url();
+    const errors = await page.locator('[role="alert"], p.text-xs, .text-red-500, .text-red-600, .error')
+      .allInnerTexts().catch(() => []);
+    throw new Error(
+      `Login did not redirect to /dashboard for ${email}. `
+      + `Still at ${url}. Page errors: ${JSON.stringify(errors.slice(0, 5))}`,
+    );
+  }
 }
 
 /**
@@ -97,7 +107,16 @@ async function getAdminCookies(browser) {
   await page.getByLabel('Email or username').fill(ADMIN_EMAIL);
   await page.getByLabel('Password').fill(ADMIN_PASSWORD);
   await page.getByRole('button', { name: /sign in/i }).click();
-  await page.waitForURL(/\/dashboard/);
+  try {
+    await page.waitForURL(/\/dashboard/, { timeout: 30_000 });
+  } catch (e) {
+    const errors = await page.locator('[role="alert"], p.text-xs, .text-red-500, .text-red-600, .error')
+      .allInnerTexts().catch(() => []);
+    throw new Error(
+      `Admin login did not redirect to /dashboard. `
+      + `Still at ${page.url()}. Page errors: ${JSON.stringify(errors.slice(0, 5))}`,
+    );
+  }
 
   const cookies = await ctx.cookies();
   await ctx.close();
