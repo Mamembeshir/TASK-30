@@ -67,6 +67,28 @@ if [ ! -f /var/www/html/vendor/autoload.php ]; then
             fi
         done
         echo "App is healthy."
+
+        # ── Guarantee seeded demo data for E2E tests ────────────────────────
+        # The entrypoint seeds on first boot using `tinker | tail -1` to
+        # count users, but that check is brittle across tinker versions and
+        # can silently skip seeding in a clean CI environment — which then
+        # shows up as "The provided credentials do not match our records"
+        # on every login test.  Verify explicitly and seed if missing.
+        # Also reset the AUTH-02 lockout counters so that accumulated failed
+        # logins from a previous run don't brick the seeded accounts.
+        echo "Ensuring seeded demo data is present..."
+        SEEDED=$(docker compose exec -T app php artisan tinker --no-interaction \
+                    --execute='echo (int) \App\Models\User::where("email","member@medvoyage.test")->exists();' \
+                    2>/dev/null | tr -cd '01' | tail -c 1)
+        if [ "$SEEDED" != "1" ]; then
+            echo "  Demo users missing — running php artisan db:seed --force..."
+            docker compose exec -T app php artisan db:seed --force
+        else
+            echo "  Demo users already present."
+        fi
+        docker compose exec -T app php artisan tinker --no-interaction \
+            --execute='\App\Models\User::query()->update(["failed_login_count" => 0, "locked_until" => null]);' \
+            >/dev/null 2>&1 || true
     else
         docker compose build --quiet
         docker compose up -d db
