@@ -68,26 +68,24 @@ if [ ! -f /var/www/html/vendor/autoload.php ]; then
         done
         echo "App is healthy."
 
-        # ── Guarantee seeded demo data for E2E tests ────────────────────────
-        # The entrypoint seeds on first boot using `tinker | tail -1` to
-        # count users, but that check is brittle across tinker versions and
-        # can silently skip seeding in a clean CI environment — which then
-        # shows up as "The provided credentials do not match our records"
-        # on every login test.  Verify explicitly and seed if missing.
-        # Also reset the AUTH-02 lockout counters so that accumulated failed
-        # logins from a previous run don't brick the seeded accounts.
-        echo "Ensuring seeded demo data is present..."
-        SEEDED=$(docker compose exec -T app php artisan tinker --no-interaction \
-                    --execute='echo (int) \App\Models\User::where("email","member@medvoyage.test")->exists();' \
-                    2>/dev/null | tr -cd '01' | tail -c 1)
-        if [ "$SEEDED" != "1" ]; then
-            echo "  Demo users missing — running php artisan db:seed --force..."
+        # ── Make sure the demo users are present ────────────────────────────
+        # The entrypoint's `tinker | tail -1` user-count check can silently
+        # skip seeding when tinker emits a banner or warning.  Query the DB
+        # directly (unambiguous integer from psql) and run db:seed only when
+        # the demo users really are missing — preserves any data already in
+        # the DB.  Also clears AUTH-02 lockout counters so prior failed test
+        # attempts don't leave the seeded accounts temporarily blocked.
+        USER_COUNT=$(docker compose exec -T db \
+            psql -U "${DB_USERNAME:-medvoyage}" -d "${DB_DATABASE:-medvoyage}" \
+                 -tAc "SELECT count(*) FROM users WHERE email='member@medvoyage.test'" \
+            2>/dev/null | tr -cd '0-9')
+        if [ "$USER_COUNT" != "1" ]; then
+            echo "Demo users missing — running php artisan db:seed --force..."
             docker compose exec -T app php artisan db:seed --force
-        else
-            echo "  Demo users already present."
         fi
-        docker compose exec -T app php artisan tinker --no-interaction \
-            --execute='\App\Models\User::query()->update(["failed_login_count" => 0, "locked_until" => null]);' \
+        docker compose exec -T db \
+            psql -U "${DB_USERNAME:-medvoyage}" -d "${DB_DATABASE:-medvoyage}" \
+                 -c "UPDATE users SET failed_login_count = 0, locked_until = NULL" \
             >/dev/null 2>&1 || true
     else
         docker compose build --quiet
@@ -120,14 +118,9 @@ if [ ! -f /var/www/html/vendor/autoload.php ]; then
     if [ "$RUN_E2E" = true ]; then
         echo ""
         echo "--- E2E / Browser Tests (Playwright) ---"
-        # `repo-playwright:latest` is baked on the developer machine but does
-        # not exist in a clean environment (CI).  Build it on demand from
-        # tests/e2e/Dockerfile when missing so `docker compose run` does not
-        # try to pull the tag from a public registry.
-        if ! docker image inspect repo-playwright:latest >/dev/null 2>&1; then
-            echo "repo-playwright:latest not present — building from tests/e2e/Dockerfile..."
-            docker compose --profile e2e build playwright
-        fi
+        # Uses the public mcr.microsoft.com/playwright:v1.59.1-noble image
+        # (see docker-compose.yml).  Docker will pull it on the first run in
+        # a clean environment (CI) and reuse the cached copy thereafter.
         docker compose --profile e2e run --rm playwright
         E2E_EXIT=$?
         [ $E2E_EXIT -ne 0 ] && EXIT_CODE=$E2E_EXIT

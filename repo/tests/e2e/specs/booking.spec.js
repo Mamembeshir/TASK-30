@@ -19,7 +19,7 @@ async function loginAs(page, email, password) {
   await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: /sign in/i }).click();
   try {
-    await page.waitForURL(/\/dashboard/, { timeout: 30_000 });
+    await page.waitForURL(/\/dashboard/, { timeout: 8_000 });
   } catch (e) {
     const url    = page.url();
     const errors = await page.locator('[role="alert"], p.text-xs, .text-red-500, .text-red-600, .error')
@@ -108,7 +108,7 @@ async function getAdminCookies(browser) {
   await page.getByLabel('Password').fill(ADMIN_PASSWORD);
   await page.getByRole('button', { name: /sign in/i }).click();
   try {
-    await page.waitForURL(/\/dashboard/, { timeout: 30_000 });
+    await page.waitForURL(/\/dashboard/, { timeout: 8_000 });
   } catch (e) {
     const errors = await page.locator('[role="alert"], p.text-xs, .text-red-500, .text-red-600, .error')
       .allInnerTexts().catch(() => []);

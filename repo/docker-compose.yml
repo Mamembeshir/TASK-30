@@ -91,30 +91,28 @@ services:
   #   docker compose --profile e2e run --rm playwright
   #
   playwright:
-    # Local runs reuse the pre-built `repo-playwright:latest` tag; CI (and any
-    # clean environment) builds it from tests/e2e/Dockerfile on demand.
-    image: repo-playwright:latest
-    build:
-      context: .
-      dockerfile: tests/e2e/Dockerfile
+    # Official Microsoft Playwright image — publicly available on mcr.microsoft.com,
+    # ships with Node 20 + @playwright/test 1.59.1 + all browsers pre-installed.
+    # No custom build step needed, works identically on a developer machine and
+    # in a clean CI environment.
+    image: mcr.microsoft.com/playwright:v1.59.1-noble
     container_name: medvoyage_playwright
     profiles:
       - e2e
     shm_size: '1gb'
+    # Mount the specs next to the image's pre-installed @playwright/test
+    # (which lives under /home/pwuser/app/node_modules) so Node's upward
+    # module-resolution finds it without a local npm install.
     volumes:
-      - ./tests/e2e:/app/e2e
-      - playwright_cache:/root/.cache/ms-playwright
-    working_dir: /app
+      - ./tests/e2e:/home/pwuser/app/e2e
+    working_dir: /home/pwuser/app
     environment:
       BASE_URL:            "http://web:8000"
       E2E_MEMBER_EMAIL:    "member@medvoyage.test"
       E2E_MEMBER_PASSWORD: "Seed1234!@"
       E2E_ADMIN_EMAIL:     "admin@medvoyage.test"
       E2E_ADMIN_PASSWORD:  "Seed1234!@"
-      PLAYWRIGHT_BROWSERS_PATH: "/root/.cache/ms-playwright"
-    command: >
-      sh -c "npx playwright install --with-deps chromium &&
-             npx playwright test --config=/app/e2e/playwright.config.js"
+    command: npx playwright test --config=/home/pwuser/app/e2e/playwright.config.js
     depends_on:
       app:
         condition: service_healthy
@@ -128,4 +126,3 @@ networks:
 volumes:
   db_data:
   app_storage:
-  playwright_cache:
