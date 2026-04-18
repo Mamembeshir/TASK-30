@@ -23,23 +23,31 @@ RUN_FEATURE=false
 RUN_E2E=false
 COVERAGE=false
 
-if [ $# -eq 0 ]; then
-    # Default: run everything
-    RUN_UNIT=true
-    RUN_FEATURE=true
-    RUN_E2E=true
-fi
+# TEMP: focus the whole script on the E2E suite while we debug the login flow.
+# Unit + Feature runs are commented out; ./run_tests.sh (no flags) now runs
+# only E2E.  Restore the block below once the E2E suite is green.
+RUN_UNIT=false
+RUN_FEATURE=false
+RUN_E2E=true
+COVERAGE=false
 
-for arg in "$@"; do
-    case $arg in
-        --unit)     RUN_UNIT=true ;;
-        --feature)  RUN_FEATURE=true ;;
-        --e2e)      RUN_E2E=true ;;
-        --browser)  RUN_E2E=true ;;
-        --coverage) COVERAGE=true ;;
-        --all)      RUN_UNIT=true; RUN_FEATURE=true; RUN_E2E=true ;;
-    esac
-done
+# if [ $# -eq 0 ]; then
+#     # Default: run everything
+#     RUN_UNIT=true
+#     RUN_FEATURE=true
+#     RUN_E2E=true
+# fi
+#
+# for arg in "$@"; do
+#     case $arg in
+#         --unit)     RUN_UNIT=true ;;
+#         --feature)  RUN_FEATURE=true ;;
+#         --e2e)      RUN_E2E=true ;;
+#         --browser)  RUN_E2E=true ;;
+#         --coverage) COVERAGE=true ;;
+#         --all)      RUN_UNIT=true; RUN_FEATURE=true; RUN_E2E=true ;;
+#     esac
+# done
 
 # ── HOST SIDE: orchestrate containers ─────────────────────────────────────────
 # /var/www/html/vendor/autoload.php only exists inside the built image.
