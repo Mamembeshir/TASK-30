@@ -52,7 +52,10 @@ if [ ! -f /var/www/html/vendor/autoload.php ]; then
     # PHP-only tests only need the db container (existing behaviour).
     if [ "$RUN_E2E" = true ]; then
         echo "Starting full application stack for E2E tests..."
-        docker compose up -d --build
+        # --force-recreate so the updated entrypoint.sh actually runs
+        # (without it, an already-healthy container from a prior session
+        # would be reused as-is and the test-user setup would not re-apply).
+        docker compose up -d --build --force-recreate
 
         echo "Waiting for app container to be healthy (up to 120 s)..."
         WAITED=0
@@ -68,43 +71,12 @@ if [ ! -f /var/www/html/vendor/autoload.php ]; then
         done
         echo "App is healthy."
 
-        # ── Ensure the demo users are present, unlocked, and have the
-        #    known test password ────────────────────────────────────────────
-        # Seed when the member user is missing (preserves any data that may
-        # already be in the DB), then explicitly reset password +
-        # lockout counters for every seeded account.  Going through the User
-        # model + Hash::make() (rather than trusting whatever the seeder
-        # produced) means the test password works regardless of DB drift
-        # between runs or past experiments.
-        echo "Ensuring seeded demo users are usable for E2E tests..."
-        USER_COUNT=$(docker compose exec -T db \
-            psql -U "${DB_USERNAME:-medvoyage}" -d "${DB_DATABASE:-medvoyage}" \
-                 -tAc "SELECT count(*) FROM users WHERE email='member@medvoyage.test'" \
-            2>/dev/null | tr -cd '0-9')
-        echo "  seeded member-user count: [$USER_COUNT]"
-        if [ "$USER_COUNT" != "1" ]; then
-            echo "  demo users missing — running php artisan db:seed --force..."
-            docker compose exec -T app php artisan db:seed --force
-        fi
-        echo "  resetting test-account passwords and lockout counters..."
-        docker compose exec -T app php artisan tinker --no-interaction --execute='
-            foreach ([
-                "admin@medvoyage.test",
-                "reviewer@medvoyage.test",
-                "finance@medvoyage.test",
-                "doctor@medvoyage.test",
-                "member@medvoyage.test",
-            ] as $email) {
-                $u = \App\Models\User::where("email", $email)->first();
-                if (!$u) { echo "  MISSING: {$email}\n"; continue; }
-                $u->forceFill([
-                    "password"            => \Hash::make("Seed1234!@"),
-                    "failed_login_count"  => 0,
-                    "locked_until"        => null,
-                ])->save();
-                echo "  OK: {$email}\n";
-            }
-        ' 2>&1 | grep -E 'MISSING|OK' || true
+        # Belt-and-suspenders: the entrypoint already ran this command on
+        # container boot, but we invoke it here too so a CI pipeline that
+        # starts the app in one step and runs tests in a separate step (with
+        # an already-running container) still gets the password reset.
+        echo "Ensuring E2E test accounts are usable..."
+        docker compose exec -T app php artisan medvoyage:ensure-test-users || true
     else
         docker compose build --quiet
         docker compose up -d db

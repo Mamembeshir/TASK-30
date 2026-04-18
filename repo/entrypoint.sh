@@ -71,15 +71,30 @@ php artisan migrate --force
 echo "      Migrations complete."
 
 # ── 6. Seed if empty ──────────────────────────────────────────────────────────
+# Query Postgres directly — `tinker --execute | tail -1` has been historically
+# unreliable (banners, warnings, tty vs pipe output) and can silently skip
+# seeding, which cascades into "The provided credentials do not match" on
+# every E2E login.
 echo "[6/7] Checking if database needs seeding..."
-USER_COUNT=$(php artisan tinker --execute="echo \App\Models\User::count();" 2>/dev/null | tail -1 || echo "0")
-if [ "$USER_COUNT" = "0" ] || [ -z "$USER_COUNT" ]; then
-    echo "      Seeding database with demo data..."
+MEMBER_PRESENT=$(PGPASSWORD="${DB_PASSWORD:-secret}" psql \
+    -h "${DB_HOST:-db}" -U "${DB_USERNAME:-medvoyage}" -d "${DB_DATABASE:-medvoyage}" \
+    -tAc "SELECT count(*) FROM users WHERE email='member@medvoyage.test'" 2>/dev/null \
+    | tr -cd '0-9')
+if [ "$MEMBER_PRESENT" != "1" ]; then
+    echo "      Demo user missing — running php artisan db:seed --force..."
     php artisan db:seed --force
     echo "      Database seeded."
 else
-    echo "      Database already has data ($USER_COUNT users), skipping seed."
+    echo "      Demo users already present, skipping seed."
 fi
+
+# ── 6b. Guarantee E2E / demo accounts are usable ─────────────────────────────
+# Runs every boot, regardless of whether we just seeded or not.  Idempotent:
+# for each of the five well-known demo accounts, re-stamps the password and
+# clears AUTH-02 lockout counters that may have accumulated during prior
+# test runs.  See app/Console/Commands/EnsureTestUsersCommand.php.
+echo "      Ensuring E2E test accounts have the expected password and are unlocked..."
+php artisan medvoyage:ensure-test-users || true
 
 # ── 7. Start services ─────────────────────────────────────────────────────────
 echo "[7/7] Starting services..."
